@@ -1,163 +1,150 @@
-![Twitch Channel Points Miner](https://raw.githubusercontent.com/zarmstrong/Twitch-Channel-Points-Miner-v3/master/assets/banner.png)
-<p align="center">
-<a href="https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/releases"><img alt="Latest Version" src="https://badgen.net/github/release/zarmstrong/Twitch-Channel-Points-Miner-v3?icon=github&iconColor=fff&color=white"></a>
-<a href="https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/stargazers"><img alt="GitHub Repo stars" src="https://badgen.net/github/stars/zarmstrong/Twitch-Channel-Points-Miner-v3?icon=github&iconColor=fff&color=32CD32"></a>
-<a href="https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/blob/master/LICENSE"><img alt="License" src="https://img.shields.io/github/license/zarmstrong/Twitch-Channel-Points-Miner-v3?style=flat&color=black&logo=unlicense&logoColor=white"></a>
-<a href="https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3"><img alt="GitHub last commit" src="https://badgen.net/github/last-commit/zarmstrong/Twitch-Channel-Points-Miner-v3?icon=github&iconColor=fff&color=FFFFE0"></a>
-</p>
+# Twitch Channel Points Miner v3
 
-<p align="center">
-<a href="https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner"><img alt="Docker Version" src="https://img.shields.io/docker/v/zacharmstrong/twitch-channel-points-miner?style=flat&color=white&logo=docker&logoColor=white&label=release"></a>
-<a href="https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner"><img alt="Docker Stars" src="https://img.shields.io/docker/stars/zacharmstrong/twitch-channel-points-miner?style=flat&color=limegreen&logo=docker&logoColor=white&label=stars"></a>
-<a href="https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner"><img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/zacharmstrong/twitch-channel-points-miner?style=flat&color=blue&logo=docker&logoColor=white&label=pulls"></a>
-<a href="https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner"><img alt="Docker Images Size AMD64" src="https://img.shields.io/docker/image-size/zacharmstrong/twitch-channel-points-miner/latest?arch=amd64&amp;label=AMD64%20image%20size&amp;style=flat&amp;color=purple&amp;logo=amd&amp;logoColor=white"></a>
-<a href="https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner"><img alt="Docker Images Size ARM64" src="https://img.shields.io/docker/image-size/zacharmstrong/twitch-channel-points-miner/latest?arch=arm64&amp;label=ARM64%20image%20size&amp;style=flat&amp;color=black&amp;logo=arm&amp;logoColor=white"></a>
-</p>
+[![Latest Version](https://badgen.net/github/release/zarmstrong/Twitch-Channel-Points-Miner-v3?icon=github&iconColor=fff&color=white)](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/releases) [![GitHub Repo stars](https://badgen.net/github/stars/zarmstrong/Twitch-Channel-Points-Miner-v3?icon=github&iconColor=fff&color=32CD32)](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/stargazers) [![License](https://img.shields.io/github/license/zarmstrong/Twitch-Channel-Points-Miner-v3?style=flat&color=black&logo=unlicense&logoColor=white)](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/blob/master/LICENSE) [![GitHub last commit](https://badgen.net/github/last-commit/zarmstrong/Twitch-Channel-Points-Miner-v3?icon=github&iconColor=fff&color=FFFFE0)](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3) [![Docker Version](https://img.shields.io/docker/v/zacharmstrong/twitch-channel-points-miner?style=flat&color=white&logo=docker&logoColor=white&label=release)](https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner) [![Docker Stars](https://img.shields.io/docker/stars/zacharmstrong/twitch-channel-points-miner?style=flat&color=limegreen&logo=docker&logoColor=white&label=stars)](https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner) [![Docker Pulls](https://img.shields.io/docker/pulls/zacharmstrong/twitch-channel-points-miner?style=flat&color=blue&logo=docker&logoColor=white&label=pulls)](https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner) [![Docker Images Size AMD64](https://img.shields.io/docker/image-size/zacharmstrong/twitch-channel-points-miner/latest?arch=amd64&label=AMD64%20image%20size&style=flat&color=purple&logo=amd&logoColor=white)](https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner) [![Docker Images Size ARM64](https://img.shields.io/docker/image-size/zacharmstrong/twitch-channel-points-miner/latest?arch=arm64&label=ARM64%20image%20size&style=flat&color=black&logo=arm&logoColor=white)](https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner)
 
+A simple script that watches a stream for you and earns channel points. It can wait for a streamer to go live (+_450 points_ when the stream starts), click the bonus button (_+50 points_), and follow raids (_+250 points_). Read more about the channel points [here](https://help.twitch.tv/s/article/channel-points-guide).
 
-<h1 align="center">https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3</h1>
+Based on [Twitch-Channel-Points-Miner-v3](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3) by [zarmstrong](https://github.com/zarmstrong).
 
-**Credits**
-- Main idea: https://github.com/gottagofaster236/Twitch-Channel-Points-Miner
-- ~~Bet system (Selenium): https://github.com/ClementRoyer/TwitchAutoCollect-AutoBet~~
-- Based on: https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2
-- Previous maintainer: [Roman Davydov](https://github.com/rdavydov), whose [v2 fork](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2) this project builds upon
+## Contents
 
-> A simple script that will watch a stream for you and earn the channel points.
-
-> It can wait for a streamer to go live (+_450 points_ when the stream starts), it will automatically click the bonus button (_+50 points_), and it will follow raids (_+250 points_).
-
-Read more about the channel points [here](https://help.twitch.tv/s/article/channel-points-guide).
-
-# README Contents
-
-1. 🤝 [Community](#community)
-2. 🚀 [Features](#features)
-3. 🧐 [How to use](#how-to-use)
-    - [Install and start](#install-and-start)
-        - [Docker quick start](#docker-quick-start)
-            - [Docker Compose](#docker-compose)
-            - [Docker CLI](#docker-cli)
-        - [Windows quick start](#windows-quick-start)
-        - [Source checkout quick start](#source-checkout-quick-start)
-    - [Configuration file](#configuration-file)
-    - [Configuration sections](#configuration-sections)
-        - [MINER_CONFIG](#miner_config)
-        - [STREAMERS](#streamers)
-        - [MINE_CONFIG](#mine_config)
-        - [Category-based Drops](#category-based-drops)
-            - [How category discovery works](#how-category-discovery-works)
-            - [Category configuration reference](#category-configuration-reference)
-            - [Category input formats](#category-input-formats)
-            - [Channel selection and sorting](#channel-selection-and-sorting)
-            - [Campaign filtering and ordering](#campaign-filtering-and-ordering)
-            - [Refresh behavior](#refresh-behavior)
-            - [Wildcard category fallback](#wildcard-category-fallback)
-            - [Category logging and analytics](#category-logging-and-analytics)
-            - [Category examples](#category-examples)
-            - [Category troubleshooting](#category-troubleshooting)
-        - [ANALYTICS_CONFIG](#analytics_config)
-    - [Runner behavior](#runner-behavior)
-        - [Configuration reload limitations](#configuration-reload-limitations)
-    - [Supervisor (optional)](#supervisor-optional)
-    - [Docker](#docker)
-        - [Docker Hub](#docker-hub)
-        - [Graceful Docker shutdowns](#graceful-docker-shutdowns)
-        - [Portainer](#portainer)
-    - [Replit](#replit)
-    - [Limits](#limits)
-4. 🔧 [Settings](#settings)
-    - [LoggerSettings](#loggersettings)
-        - [Color Palette](#color-palette)
-        - [Notifications](#notifications)
-            - [Telegram](#telegram)
-            - [Discord](#discord)
-            - [Generic Webhook](#generic-webhook)
-            - [ntfy](#ntfy)
-            - [Apprise](#apprise)
-            - [Matrix](#matrix)
-            - [Pushover](#pushover)
-            - [Gotify](#gotify)
-            - [Email / SMTP](#email--smtp)
-        - [Events](#events)
-    - [StreamerSettings](#streamersettings)
-    - [BetSettings](#betsettings)
-        - [Bet strategy](#bet-strategy)
-        - [FilterCondition](#filtercondition)
-            - [Example](#example)
-        - [DelayMode](#delaymode)
-5. 📈 [Analytics](#analytics)
-    - [Analytics security and HTTPS reverse proxy](#analytics-security-and-https-reverse-proxy)
-    - [Enabling analytics storage](#enabling-analytics-storage)
-6. 🧾 [Logs](#logs)
-    - [Full format](#full-format)
-    - [Compact format](#compact-format)
-    - [Graceful-shutdown report](#graceful-shutdown-report)
-7. 🔄 [Migrating from run.py](#migrating-from-runpy)
-    - [Automatic Docker migration](#automatic-docker-migration)
-    - [What converts automatically](#what-converts-automatically)
-8. 🍪 [Legacy cookie migration (optional)](#legacy-cookie-migration-optional)
-9. 🪟 [Windows](#windows)
-    - [Standard vs. portable](#standard-vs-portable)
-    - [Install the Windows executable](#install-the-windows-executable)
-    - [Set up your account](#set-up-your-account)
-    - [Start the miner](#start-the-miner)
-    - [Update the miner](#update-the-miner)
-    - [Windows troubleshooting](#windows-troubleshooting)
-10. 📱 [Termux](#termux)
-11. ⚠️ [Disclaimer](#disclaimer)
-
-## Community
-If you want to help with this project, please leave a star 🌟 and share it with your friends! 😎
-
-If you want to support development, you can donate through Ko-fi or cryptocurrency:
-
-[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/B0B61NBJ0)
-
-| Currency | Wallet address |
-| --- | --- |
-| Bitcoin (BTC) | `bc1qdpg70u7u6fganwtddf9z3uwugkxkpltre4cva3` |
-| Ethereum (ETH) | `0x926fce1Eb65e867Af751a9cB75394DF001b58DF0` |
-| Dogecoin (DOGE) | `DHo26McxeVLFwQmRXdUH7LyHsdEUoVFvga` |
-
-If you have any issues or you want to contribute, you are welcome! But please read the [CONTRIBUTING.md](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/blob/master/CONTRIBUTING.md) file. Contributors working on code can find setup, test commands, and suite conventions in the [testing guide](tests/README.md).
+- [Features](#features)
+- [Before you start](#before-you-start)
+  - [Limits](#limits)
+- [Install](#install)
+  - [Docker](#docker)
+  - [Windows executable](#windows-executable)
+- [First run](#first-run)
+- [Configuration](#configuration)
+  - [Configuration file](#configuration-file)
+  - [Configuration sections](#configuration-sections)
+- [Runner behavior](#runner-behavior)
+  - [Configuration reload limitations](#configuration-reload-limitations)
+- [Supervisor (optional)](#supervisor-optional)
+- [Docker reference](#docker-reference)
+  - [Docker Hub](#docker-hub)
+  - [Graceful Docker shutdowns](#graceful-docker-shutdowns)
+  - [Portainer](#portainer)
+- [Replit](#replit)
+- [Settings](#settings)
+  - [LoggerSettings](#loggersettings)
+  - [StreamerSettings](#streamersettings)
+  - [BetSettings](#betsettings)
+- [Analytics](#analytics)
+  - [Analytics security and HTTPS reverse proxy](#analytics-security-and-https-reverse-proxy)
+  - [Enabling analytics storage](#enabling-analytics-storage)
+- [Logs](#logs)
+  - [Full format](#full-format)
+  - [Compact format](#compact-format)
+  - [Graceful-shutdown report](#graceful-shutdown-report)
+- [Migrating from run.py](#migrating-from-runpy)
+  - [Automatic Docker migration](#automatic-docker-migration)
+  - [What converts automatically](#what-converts-automatically)
+  - [Persisted data versions](#persisted-data-versions)
+- [Legacy cookie migration (optional)](#legacy-cookie-migration-optional)
+- [Windows](#windows)
+  - [Standard vs. portable](#standard-vs-portable)
+  - [Install the Windows executable](#install-the-windows-executable)
+  - [Set up your account](#set-up-your-account)
+  - [Start the miner](#start-the-miner)
+  - [Update the miner](#update-the-miner)
+- [Termux](#termux)
+- [Troubleshooting](#troubleshooting)
+  - [Windows troubleshooting](#windows-troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+- [Support](#support)
 
 ## Features
 
-- Automatically watches eligible channels and claims channel-point bonuses.
-- Waits for configured streamers to go live and follows eligible raids.
-- Prioritizes channels by watch streaks, Drops, subscriptions, configured order,
-  or channel-point balance.
-- Discovers live channels from configured game categories and active Drop
-  campaigns.
-- Tracks Drop progress and claims available Drop rewards and Moments.
-- Participates in channel-point predictions with configurable strategies,
-  spending limits, filters, and timing.
-- Supports per-streamer settings, follower imports, and blacklists.
-- Can join IRC chat and notify you when your username is mentioned.
-- Sends selected events through Telegram, Discord, Matrix, Pushover, Gotify,
-  email, or a generic webhook.
-- Provides colorized console logs, rotating log files, compact logging, and a
-  graceful-shutdown report.
-- Includes an optional analytics server for point history, Drops, and log viewing.
-- Supports persistent Docker configuration with automatic legacy-runner
-  conversion and limited live configuration reloads.
+- 👀 **Channel watching**: automatically watches eligible channels and claims channel-point bonuses.
+- ⏰ **Streamer and raid handling**: waits for configured streamers to go live and follows eligible raids.
+- 🏆 **Priority**: prioritizes channels by watch streaks, Drops, subscriptions, configured order, or channel-point balance.
+- 🎮 **Category discovery**: discovers live channels from configured game categories and active Drop campaigns.
+- 🎁 **Drops and Moments**: tracks Drop progress and claims available Drop rewards and Moments.
+- 🎲 **Predictions**: participates in channel-point predictions with configurable strategies, spending limits, filters, and timing.
+- ⚙️ **Per-streamer settings**: supports per-streamer settings, follower imports, and blacklists.
+- 💬 **IRC chat**: can join IRC chat and notify you when your username is mentioned.
+- 🔔 **Notifications**: sends selected events through Telegram, Discord, Matrix, Pushover, Gotify, email, ntfy, Apprise, or a generic webhook.
+- 📜 **Logs**: provides colorized console logs, rotating log files, compact logging, and a graceful-shutdown report.
+- 📊 **Analytics**: includes an optional analytics server for point history, Drops, and log viewing.
+- 🐳 **Docker**: supports persistent Docker configuration with automatic legacy-runner conversion and limited live configuration reloads.
+- 📨 **Apprise notifier**: sends notifications through Apprise. Optional; install it with `pip install apprise`.
+- 🧭 **Channel Drop campaigns**: reads channel Drop campaigns from `DropChannelCampaignsProgress`, which works under the TV login.
+- ⚡ **Fast Drop claims**: claims drops as soon as PubSub reports them claimable.
+- 🛟 **Raw-query fallback**: falls back to a raw query when Twitch retires a persisted GQL hash.
+- 🧰 **Supervisor (optional)**: a cross-platform supervisor for source checkouts with auto-update, restarts, and Pushover alerts.
 
-## How to use
+## Before you start
 
-Choose one of the three supported paths below. Each quick start takes you from
-installation through the first launch without requiring another section.
+> [!WARNING]
+> **No guarantee or warranty.** This project comes with no guarantee or warranty. You are responsible for whatever happens from using this project.
+>
+> **Soft or hard ban risk.** It is possible to get soft or hard banned by using this project if you are not careful.
+>
+> **Not affiliated with Twitch.** This is a personal project and is in no way affiliated with Twitch.
+>
+> **Two-channel limit.** Twitch allows you to watch two channels at one time. Set `streams_watched` to `1` or `2` in `MINER_CONFIG`; the default is `2`.
+>
+> **Ad risk.** Turbo users have reported ads when two mined streams run continuously. Setting `streams_watched` to `1` is a mitigation, not a guarantee.
+>
+> **Priority order.** Write the `STREAMERS` array in priority order, from left to right.
+>
+> **Drop segment requests.** Watched Drops streams receive a `HEAD` request for each new HLS segment. No stream audio or video is downloaded.
 
-### Install and start
+You'll need:
 
-#### Docker quick start
+- Python 3.11 or newer, below 3.15 (`python_requires=">=3.11,<3.15"` in `setup.py`), for a source checkout.
+- A Twitch account.
+- Git, for a source checkout.
+- Docker, optional, for the Docker path.
+- Windows 10 or 11, for the Windows executable path.
+
+### Limits
+_**Twitch has a limit - you can't watch more than two channels at one time. Set
+`streams_watched` to `1` or `2` in `MINER_CONFIG` to control how many are watched
+concurrently; the default is `2`. The highest-priority streamers are selected.**_
+
+The `streams_watched` option exists because each mined channel creates viewing
+activity on the account. Twitch Turbo users have reported that running two mined
+streams continuously, especially while also watching Twitch normally, may result
+in ads being served ([upstream issue #787](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2/issues/787)).
+Setting the option to `1` reduces the miner's concurrent viewing activity. It is
+a mitigation rather than a guarantee, because Twitch does not document this
+behavior.
+
+Make sure to write the streamers array in order of priority from left to right. If you use `followers=True` you can choose to download the followers sorted by follow date (ASC or DESC).
+
+Since October 2026 Twitch only credits time-based Drop progress while a
+stream's media segments are actually being requested, so the miner polls the
+HLS playlist of each watched stream that has Drops to earn and sends a
+lightweight `HEAD` request for every new segment. No stream audio or video is
+downloaded, and streams watched only for channel points are skipped. This runs
+automatically in the background and needs no configuration.
+
+## Install
+
+```sh
+git clone https://github.com/klept0/Twitch-Channel-Points-Miner-v3.git
+cd Twitch-Channel-Points-Miner-v3
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+mkdir -p config && cp config.example.py config/config.py
+```
+
+Use a source checkout when you want to inspect, develop, or modify the project.
+Python 3.11 through 3.14 is supported.
+
+### Docker
 
 Docker is the best fit for servers, NAS devices, and unattended operation.
 Choose either Docker Compose or the plain Docker CLI. Both examples persist the
 configuration, authentication cookies, logs, and analytics in the current
 directory.
 
-##### Docker Compose
+#### Docker Compose
 
 Create an empty working directory containing this `compose.yml`:
 
@@ -187,7 +174,7 @@ streamers, disable unused notification providers, and change `restart: "no"` to
 `restart: unless-stopped`. Run `docker compose up` interactively to complete the
 first Twitch sign-in, then use `docker compose up -d` for later starts.
 
-##### Docker CLI
+#### Docker CLI
 
 Create the persistent directories, then run a temporary container once to seed
 the configuration:
@@ -229,10 +216,10 @@ After the initial login, manage the existing container with
 creation command again. On Windows, replace each `$(pwd)` expression with an
 absolute host path, such as `C:\TwitchMiner\config`.
 
-The later [Docker reference](#docker) covers multiple accounts, Portainer, time
+The later [Docker reference](#docker-reference) covers multiple accounts, Portainer, time
 zones, and graceful shutdown behavior in more detail.
 
-#### Windows quick start
+### Windows executable
 
 The Windows executable does not require Python or Git. Two distributions are
 published on every release: `TwitchChannelPointsMiner-<version>-Setup.exe`
@@ -256,20 +243,7 @@ or run from removable media. See [Windows](#windows) for the full comparison.
 The later [Windows reference](#windows) covers both distributions, updates,
 and troubleshooting in detail.
 
-#### Source checkout quick start
-
-Use a source checkout when you want to inspect, develop, or modify the project.
-Python 3.11 through 3.14 is supported.
-
-```sh
-git clone https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3
-cd Twitch-Channel-Points-Miner-v3
-python3 -m venv venv
-source venv/bin/activate  # Windows PowerShell: .\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-mkdir -p config
-cp config.example.py config/config.py
-```
+## First run
 
 Edit `config/config.py`, then start the stable runner:
 
@@ -282,6 +256,8 @@ share account names, passwords, webhook URLs, or notification credentials.
 Portainer is a Docker deployment. The [Termux](#termux) instructions are
 outdated and unsupported, and there is no maintained [Replit](#replit)
 deployment.
+
+## Configuration
 
 ### Configuration file
 
@@ -320,7 +296,7 @@ categories, and analytics.
 ### Configuration sections
 
 | Name | Passed to | Purpose |
-|---|---|---|
+| :-- | :-- | :-- |
 | `MINER_CONFIG` | `TwitchChannelPointsMiner(...)` | Account, priority, default streamer behavior, logging, notifications, and global runtime options. |
 | `STREAMERS` | First argument of `mine(...)` | Ordered streamer logins or `Streamer` objects with per-channel overrides. Use `[]` when relying only on followers or categories. |
 | `MINE_CONFIG` | Keyword arguments of `mine(...)` | Followers, blacklist, category discovery, Drops diagnostics, and other mining-session options. Do not include `streamers` here. |
@@ -483,7 +459,7 @@ settings.
 ##### Category configuration reference
 
 | Option | Default | Description |
-|---|---:|---|
+| :-- | :-- | :-- |
 | `categories` | `[]` | Category names, slugs, URLs, or category/streamer selectors to discover. |
 | `category_drops_enabled` | `True` | Require the live channel to have a `DropsEnabled` tag. This also affects campaign eligibility checks. |
 | `category_limit` | `30` | Maximum channels returned by a normal category search. Values below 1 behave as 1. Restricted campaign discovery may select up to 20 live channels per campaign instead. |
@@ -544,7 +520,7 @@ not supported on a URL; use the category name or slug form.
 `category_sort` accepts a `CategorySort` member or its string value:
 
 | Value | Selection behavior |
-|---|---|
+| :-- | :-- |
 | `ORDER` | Keep Twitch's API order. |
 | `VIEWERS_DESC` | Highest viewer count first. This is the default. |
 | `VIEWERS_ASC` | Lowest viewer count first. |
@@ -664,7 +640,7 @@ MINE_CONFIG = {
 ```
 
 | Option | Default | Description |
-|---|---:|---|
+| :-- | :-- | :-- |
 | `wildcard_categories` | `False` | Enable the fallback. Only activates once the preferred `categories` pass produces zero live streamers this cycle. |
 | `wildcard_category_limit` | `10` | Maximum distinct wildcard categories added per refresh cycle. With `wildcard_category_pin_active=True`, an already-tracked wildcard category doesn't count against this cap, so the effective tracked count can exceed it -- that throttles new additions only, it does not cap the total. |
 | `wildcard_category_streamer_limit` | `1` | Live channels pulled per wildcard category. Kept small by default since this is best-effort filler, not a curated list. |
@@ -733,20 +709,6 @@ MINE_CONFIG = {
 }
 ```
 
-##### Category troubleshooting
-
-| Symptom | What to check |
-|---|---|
-| No category streamers are loaded | Confirm the game has an active, incomplete campaign and try its Twitch directory URL. Enable `print_open_drop_campaigns_on_load=True` to inspect detected campaigns. |
-| A live channel is skipped | With `category_drops_enabled=True`, it must have the `DropsEnabled` tag. Restricted campaigns may also require the channel to be on the campaign's allowlist. |
-| A forced streamer is skipped | Confirm the login is live, streaming the requested game, and has the Drops tag when required. |
-| The chosen channels are unexpected | Check `category_sort`, `category_limit`, category order, and `CategoryCampaignOrder`. Restricted campaign allowlists take precedence over a normal category search. |
-| A removed category still affects selection | Refresh only adds streamers; restart the miner to remove already-loaded category channels. |
-| Category messages are missing | Set `category_log_level=logging.INFO` or `logging.DEBUG` and ensure the logger/console threshold permits that level. |
-| Analytics omit channel point changes | Set `track_category_streamer_points=True`; it defaults to `False` for category-only channels. |
-| Wildcard categories never activate | They only run once the preferred `categories` pass produces zero live streamers this cycle -- a long `categories` list with even one currently-live match will keep wildcard standing down. Confirm `wildcard_categories=True`, and check whether any configured category currently has a live matching channel, e.g. via `print_open_drop_campaigns_on_load=True` and `category_log_level=logging.DEBUG`. |
-| A wildcard channel keeps getting swapped out | Set `wildcard_category_pin_active=True` (the default) so an already-tracked wildcard category isn't dropped just for falling out of the top `wildcard_category_limit` on a re-sort. |
-
 A channel eligible for both `auto_mine_badge_drops` and
 `wildcard_categories` at once is claimed by whichever source
 `streamer_source()` checks first -- badges, then wildcard, then ordinary
@@ -761,7 +723,7 @@ provide the keyword arguments for `analytics(...)`, such as `host`, `port`,
 also requires `MINER_CONFIG["enable_analytics"] = True`. See [Analytics](#analytics)
 for configuration and security guidance.
 
-### Runner behavior
+## Runner behavior
 
 Docker, Windows, and source checkouts all use the stable application runner. It
 loads `config/config.py`, starts analytics when configured, applies supported
@@ -785,7 +747,7 @@ Generated Python is parsed before replacement. If an earlier migration left an
 invalid file and a versioned backup exists, startup rebuilds the config from that
 backup without overwriting it.
 
-#### Configuration reload limitations
+### Configuration reload limitations
 
 - New entries in `STREAMERS` are applied without a restart. Removing an
   explicitly configured streamer also removes its loaded state, chat connection,
@@ -798,7 +760,7 @@ backup without overwriting it.
 - Invalid configuration is logged and ignored. The watcher retries after the
   file changes again.
 
-### Supervisor (optional)
+## Supervisor (optional)
 
 `supervisor/` is an optional supervisor for source checkouts on Windows, Linux,
 and macOS. It runs `python -m TwitchChannelPointsMiner.runner --config-dir config`
@@ -819,9 +781,9 @@ work). Optional alerts go in `supervisor/miner-alerts.json`; copy
 `supervisor/miner-alerts.example.json` and keep the file private. Logs and
 status are written to `supervisor-logs/`.
 
-### Docker
+## Docker reference
 
-#### Docker Hub
+### Docker Hub
 Official Docker images are on https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner for `linux/amd64` and `linux/arm64`. The same tags are also published to the legacy https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner-v2 repository so existing installations continue to receive updates.
 
 The ARM64 image can run in compatible 64-bit Android Linux environments where
@@ -900,7 +862,7 @@ such as `/path/to/cookies:/usr/src/app/cookies`.
 On Windows, use absolute host paths. For example, mount
 `C:\Absolute\Path\config` at `/usr/src/app/config`.
 
-#### Graceful Docker shutdowns
+### Graceful Docker shutdowns
 
 The miner handles Docker's normal `SIGTERM` stop signal and writes its
 graceful-shutdown report after stopping its worker threads. This applies to
@@ -959,37 +921,15 @@ docker run --name user2 -it \
     zacharmstrong/twitch-channel-points-miner
 ```
 
-#### Portainer
+### Portainer
 
 See the [Portainer deployment guide](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/wiki/Deploy-with-Portainer)
 for persistent storage, container settings, first-time authentication, analytics,
 and updates.
 
-### Replit
+## Replit
 
 This repository does not currently maintain an official Replit deployment.
-
-### Limits
-_**Twitch has a limit - you can't watch more than two channels at one time. Set
-`streams_watched` to `1` or `2` in `MINER_CONFIG` to control how many are watched
-concurrently; the default is `2`. The highest-priority streamers are selected.**_
-
-The `streams_watched` option exists because each mined channel creates viewing
-activity on the account. Twitch Turbo users have reported that running two mined
-streams continuously, especially while also watching Twitch normally, may result
-in ads being served ([upstream issue #787](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2/issues/787)).
-Setting the option to `1` reduces the miner's concurrent viewing activity. It is
-a mitigation rather than a guarantee, because Twitch does not document this
-behavior.
-
-Make sure to write the streamers array in order of priority from left to right. If you use `followers=True` you can choose to download the followers sorted by follow date (ASC or DESC).
-
-Since October 2026 Twitch only credits time-based Drop progress while a
-stream's media segments are actually being requested, so the miner polls the
-HLS playlist of each watched stream that has Drops to earn and sends a
-lightweight `HEAD` request for every new segment. No stream audio or video is
-downloaded, and streams watched only for channel points are skipped. This runs
-automatically in the background and needs no configuration.
 
 ## Settings
 Most settings are documented inline in [config.example.py](config.example.py).
@@ -1019,7 +959,7 @@ and include `Priority.FAVORITE` to reserve watch slots for favorites first.
 ### LoggerSettings
 
 | Key | Type | Default | Description |
-|---|---|---|---|
+| :-- | :-- | :-- | :-- |
 | `save` | bool | `True` | Save logs to rotating files. |
 | `less` | bool | `False` | Use compact log formatting and shorter messages. |
 | `console_format` | str or `LoggingFormat` | `"text"` | Console log format: `"text"` or `"json"`. JSON writes one object per line with an ISO 8601 timestamp (offset included), the account `username`, and the `event` name when present. `emoji`, `colored`, and `date_format` only affect `"text"`; `less` also shortens the messages themselves, so it changes the JSON `message` field too. |
@@ -1108,7 +1048,7 @@ Assign this object to `MINER_CONFIG["logger_settings"]`. The complete
 Placeholder values are ignored; use real credentials and never commit them.
 
 | Provider | Destination | Class |
-|---|---|---|
+| :-- | :-- | :-- |
 | Telegram | Bot chat | `Telegram` |
 | Discord | Channel webhook | `Discord` |
 | Generic webhook | HTTP endpoint | `Webhook` |
@@ -1136,7 +1076,7 @@ Create a bot with [@BotFather](https://t.me/botfather), then obtain the numeric
 destination `chat_id` (for example with [@getmyid_bot](https://t.me/getmyid_bot)).
 
 | Key | Type | Default | Description |
-|---|---|---|---|
+| :-- | :-- | :-- | :-- |
 | `chat_id` | int | Required | Numeric Telegram chat ID. |
 | `token` | str | Required | Bot token issued by BotFather. |
 | `events` | list | Required | Events to send. |
@@ -1159,7 +1099,7 @@ In the destination channel, open **Edit Channel > Integrations > Webhooks**,
 create a webhook, and copy its URL.
 
 | Key | Type | Default | Description |
-|---|---|---|---|
+| :-- | :-- | :-- | :-- |
 | `webhook_api` | str | Required | Discord webhook URL. |
 | `events` | list | Required | Events to send. |
 
@@ -1176,7 +1116,7 @@ Discord(
 as form fields in the request body for `POST`.
 
 | Key | Type | Default | Description |
-|---|---|---|---|
+| :-- | :-- | :-- | :-- |
 | `endpoint` | str | Required | Destination URL. |
 | `method` | str | Required | `POST` or `GET`. |
 | `events` | list | Required | Events to send. |
@@ -1200,7 +1140,7 @@ hard-to-guess topic and do not commit it. Protected topics can use an access
 token.
 
 | Key | Type | Default | Description |
-|---|---|---|---|
+| :-- | :-- | :-- | :-- |
 | `topic` | str | Required | Destination topic name. |
 | `events` | list | Required | Events to send. |
 | `server_url` | str | `"https://ntfy.sh"` | Hosted or self-hosted ntfy server URL. |
@@ -1232,7 +1172,7 @@ Apprise is optional. Install it with `pip install apprise` only if you use this
 notifier. Without it, the miner logs one warning and keeps running.
 
 | Key | Type | Default | Description |
-|---|---|---|---|
+| :-- | :-- | :-- | :-- |
 | `urls` | str or list | Required | One or more Apprise service URLs. |
 | `events` | list | Required | Events to send. |
 | `title` | str | `"Twitch Channel Points Miner"` | Notification title. |
@@ -1251,7 +1191,7 @@ Apprise(
 Matrix logs in when configured, then sends plain-text messages to the room.
 
 | Key | Type | Default | Description |
-|---|---|---|---|
+| :-- | :-- | :-- | :-- |
 | `username` | str | Required | Username accepted by the homeserver. |
 | `password` | str | Required | Matrix account password. |
 | `homeserver` | str | Required | Hostname without `https://`, such as `matrix.org`. |
@@ -1277,7 +1217,7 @@ Create an application at [Pushover](https://pushover.net/), then use the account
 user key and application API token.
 
 | Key | Type | Default | Description |
-|---|---|---|---|
+| :-- | :-- | :-- | :-- |
 | `userkey` | str | Required | Pushover user or group key. |
 | `token` | str | Required | Application API token. |
 | `priority` | int | Required | [Pushover message priority](https://pushover.net/api#priority). Later messages of a split notification go at quiet priority (-1), or -2 when the configured priority is -2 or lower. |
@@ -1300,7 +1240,7 @@ Create an application in Gotify and use its message endpoint, including the
 application token.
 
 | Key | Type | Default | Description |
-|---|---|---|---|
+| :-- | :-- | :-- | :-- |
 | `endpoint` | str | Required | Message URL, such as `https://gotify.example/message?token=TOKEN`. |
 | `priority` | int | Required | Priority passed to Gotify. |
 | `events` | list | Required | Events to send. |
@@ -1319,7 +1259,7 @@ Email uses Python's built-in SMTP support and accepts one recipient or a list or
 tuple of recipients.
 
 | Key | Type | Default | Description |
-|---|---|---|---|
+| :-- | :-- | :-- | :-- |
 | `host` | str | Required | SMTP server hostname. |
 | `port` | int | Required | SMTP server port. |
 | `sender` | str | Required | Address placed in the `From` header. |
@@ -1360,7 +1300,7 @@ Import `Events` from `TwitchChannelPointsMiner.classes.Settings` and select any
 of these values in each provider's `events` list.
 
 | Event | Sent when |
-|---|---|
+| :-- | :-- |
 | `UPDATE_AVAILABLE` | The update checker finds a newer release. This alert is forced through every configured provider when update checking is enabled. |
 | `DAILY_REPORT` | The scheduled point and Drop activity summary is generated. Requires `daily_report=True`. |
 | `STREAMER_ONLINE` | A tracked streamer goes live. |
@@ -1389,7 +1329,7 @@ of these values in each provider's `events` list.
 ### StreamerSettings
 
 | Key | Type | Default | Description |
-|---|---|---|---|
+| :-- | :-- | :-- | :-- |
 | `make_predictions` | bool | `True` | Participate in channel-point predictions. |
 | `follow_raid` | bool | `True` | Follow eligible raids. |
 | `claim_drops` | bool | `True` | Accumulate Drop watch progress and claim available Drops. |
@@ -1410,7 +1350,7 @@ Allowed values for `chat` are:
 ### BetSettings
 
 | Key | Type | Default | Description |
-|---|---|---|---|
+| :-- | :-- | :-- | :-- |
 | `strategy` | Strategy | `SMART` | Prediction outcome-selection strategy. |
 | `percentage` | int | `5` | Percentage of the current balance to place. |
 | `percentage_gap` | int | `20` | Percentage-point gap used by the SMART strategy. |
@@ -1451,7 +1391,7 @@ miner selects “over 7.5.”
 #### FilterCondition
 
 | Key | Type | Default | Description |
-|---|---|---|---|
+| :-- | :-- | :-- | :-- |
 | `by` | OutcomeKeys | `None` | Prediction value to evaluate. |
 | `where` | Condition | `None` | Comparison operator. |
 | `value` | number | `None` | Comparison target. |
@@ -1524,7 +1464,7 @@ the saved value. Protect the Config tab with the same analytics authentication
 and HTTPS guidance described below.
 
 | Light theme | Dark theme |
-| ----------- | ---------- |
+| :-- | :-- |
 | ![Light theme](https://raw.githubusercontent.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/master/assets/chart-analytics-light.png) | ![Dark theme](https://raw.githubusercontent.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/master/assets/chart-analytics-dark.png) |
 
 Enable storage with `MINER_CONFIG["enable_analytics"] = True` and configure the
@@ -1680,7 +1620,7 @@ exactly one `.mine(...)` call, and no more than one `.analytics(...)` call. The
 converter maps them as follows:
 
 | Legacy expression | New configuration value |
-|---|---|
+| :-- | :-- |
 | Arguments to `TwitchChannelPointsMiner(...)` | `MINER_CONFIG` |
 | First positional argument to `.mine(...)` | `STREAMERS` |
 | Keyword arguments to `.mine(...)` | `MINE_CONFIG` |
@@ -1752,7 +1692,7 @@ To reuse an old cookie:
    its structure, rewrites it as JSON, and limits its permissions to the owner.
 
 For Docker, the host directory must be mounted at `/usr/src/app/cookies` as shown
-in [Docker](#docker). The same per-account filename rule applies inside the
+in [Docker](#docker-reference). The same per-account filename rule applies inside the
 mounted directory. Use a separate cookie and config directory for each account.
 
 The legacy cookie may no longer be accepted by Twitch. If the miner reports an
@@ -1869,30 +1809,6 @@ logs are saved depends on which distribution you installed (see
   5. Start the miner normally. Your existing configuration and login data
      remain in place.
 
-### Windows troubleshooting
-
-- **The desktop window never appears, or a console window flashes and
-  closes:** The executable needs the Microsoft Edge WebView2 runtime, which
-  ships with Windows 11 and most up-to-date Windows 10 installs. If it's
-  missing, install the
-  [Evergreen WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
-  and run the executable again.
-- **The Dashboard tab shows "The dashboard isn't available yet":** Check the
-  Console tab for the reason. Analytics may still be starting up, or
-  `enable_analytics` may be set to `False` in `config\config.py`.
-- **Windows says it cannot find the configuration (portable build only):**
-  Right-click the downloaded ZIP and use **Extract All...** before running the
-  executable.
-- **Emoji or symbols look broken:** In `config.py`, use
-  `LoggerSettings(emoji=False)` in `MINER_CONFIG["logger_settings"]`. See
-  [LoggerSettings](#loggersettings) for the complete example.
-- **The miner closes or reports an error after setup:** Check the Console tab,
-  or use the desktop window's **Open logs folder** button (or open
-  `%LOCALAPPDATA%\TwitchChannelPointsMiner\logs` for a Standard install, or
-  the `logs` folder beside the executable for a portable one) and check the
-  newest log file. Remove account names, cookies, tokens, and passwords
-  before sharing a log in a bug report.
-
 Developers who want to create the executable from source can use the
 [Windows build guide](BUILD.md#windows-executable).
 
@@ -1941,5 +1857,82 @@ pip install Twitch-Channel-Points-Miner-v2
 
 Read more at [#92](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/92) [#76](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/76)
 
-## Disclaimer
-This project comes with no guarantee or warranty. You are responsible for whatever happens from using this project. It is possible to get soft or hard banned by using this project if you are not careful. This is a personal project and is in no way affiliated with Twitch.
+## Troubleshooting
+
+| Symptom | What to do |
+| :-- | :-- |
+| No category streamers are loaded | Confirm the game has an active, incomplete campaign and try its Twitch directory URL. Enable `print_open_drop_campaigns_on_load=True` to inspect detected campaigns. |
+| A live channel is skipped | With `category_drops_enabled=True`, it must have the `DropsEnabled` tag. Restricted campaigns may also require the channel to be on the campaign's allowlist. |
+| A forced streamer is skipped | Confirm the login is live, streaming the requested game, and has the Drops tag when required. |
+| The chosen channels are unexpected | Check `category_sort`, `category_limit`, category order, and `CategoryCampaignOrder`. Restricted campaign allowlists take precedence over a normal category search. |
+| A removed category still affects selection | Refresh only adds streamers; restart the miner to remove already-loaded category channels. |
+| Category messages are missing | Set `category_log_level=logging.INFO` or `logging.DEBUG` and ensure the logger/console threshold permits that level. |
+| Analytics omit channel point changes | Set `track_category_streamer_points=True`; it defaults to `False` for category-only channels. |
+| Wildcard categories never activate | They only run once the preferred `categories` pass produces zero live streamers this cycle -- a long `categories` list with even one currently-live match will keep wildcard standing down. Confirm `wildcard_categories=True`, and check whether any configured category currently has a live matching channel, e.g. via `print_open_drop_campaigns_on_load=True` and `category_log_level=logging.DEBUG`. |
+| A wildcard channel keeps getting swapped out | Set `wildcard_category_pin_active=True` (the default) so an already-tracked wildcard category isn't dropped just for falling out of the top `wildcard_category_limit` on a re-sort. |
+| The desktop window never appears, or a console window flashes and closes | Install the Evergreen WebView2 Runtime, then run the executable again. |
+| The Dashboard tab shows "The dashboard isn't available yet" | Check the Console tab for the reason. Analytics may still be starting, or `enable_analytics` may be `False` in `config\config.py`. |
+| Windows says it cannot find the configuration (portable build only) | Right-click the downloaded ZIP, select **Extract All...**, then run the executable. |
+| Emoji or symbols look broken | Set `LoggerSettings(emoji=False)` in `MINER_CONFIG["logger_settings"]`. See [LoggerSettings](#loggersettings). |
+| The miner closes or reports an error after setup | Check the Console tab or the newest log file. Remove account names, cookies, tokens, and passwords before you share a log. |
+
+### Windows troubleshooting
+
+- **The desktop window never appears, or a console window flashes and
+  closes:** The executable needs the Microsoft Edge WebView2 runtime, which
+  ships with Windows 11 and most up-to-date Windows 10 installs. If it's
+  missing, install the
+  [Evergreen WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
+  and run the executable again.
+- **The Dashboard tab shows "The dashboard isn't available yet":** Check the
+  Console tab for the reason. Analytics may still be starting up, or
+  `enable_analytics` may be set to `False` in `config\config.py`.
+- **Windows says it cannot find the configuration (portable build only):**
+  Right-click the downloaded ZIP and use **Extract All...** before running the
+  executable.
+- **Emoji or symbols look broken:** In `config.py`, use
+  `LoggerSettings(emoji=False)` in `MINER_CONFIG["logger_settings"]`. See
+  [LoggerSettings](#loggersettings) for the complete example.
+- **The miner closes or reports an error after setup:** Check the Console tab,
+  or use the desktop window's **Open logs folder** button (or open
+  `%LOCALAPPDATA%\TwitchChannelPointsMiner\logs` for a Standard install, or
+  the `logs` folder beside the executable for a portable one) and check the
+  newest log file. Remove account names, cookies, tokens, and passwords
+  before sharing a log in a bug report.
+
+## Contributing
+
+If you have any issues or you want to contribute, you are welcome! But please read the [CONTRIBUTING.md](CONTRIBUTING.md) file. Contributors working on code can find setup, test commands, and suite conventions in the [testing guide](tests/README.md).
+
+- Code is Black-formatted. The Black version is pinned in `requirements-dev.txt`.
+- Run the tests with `python -m pytest`.
+- Use Conventional Commit titles for commits, such as `fix: handle empty category list`.
+- Changes meant for upstream go to [zarmstrong/Twitch-Channel-Points-Miner-v3](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3).
+
+## License
+
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
+
+## Acknowledgments
+
+- Main idea: https://github.com/gottagofaster236/Twitch-Channel-Points-Miner
+- ~~Bet system (Selenium): https://github.com/ClementRoyer/TwitchAutoCollect-AutoBet~~
+- Based on: https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2
+- Previous maintainer: [Roman Davydov](https://github.com/rdavydov), whose [v2 fork](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2) this project builds upon
+- zarmstrong v3: [Twitch-Channel-Points-Miner-v3](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3) by [zarmstrong](https://github.com/zarmstrong).
+
+To support the upstream maintainer, zarmstrong:
+
+[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/B0B61NBJ0)
+
+| Currency | Wallet address |
+| :-- | :-- |
+| Bitcoin (BTC) | `bc1qdpg70u7u6fganwtddf9z3uwugkxkpltre4cva3` |
+| Ethereum (ETH) | `0x926fce1Eb65e867Af751a9cB75394DF001b58DF0` |
+| Dogecoin (DOGE) | `DHo26McxeVLFwQmRXdUH7LyHsdEUoVFvga` |
+
+## Support
+
+If this helps you, give it a ⭐️.
+
+Found a bug or have a question? [Open an issue](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues).
