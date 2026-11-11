@@ -1843,7 +1843,7 @@ Developers who want to create the executable from source can use the
 3. Clone this repository:
 
    ```sh
-   git clone https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3
+   git clone https://github.com/klept0/Twitch-Channel-Points-Miner-v3.git
    ```
 
 4. Go to the miner's directory:
@@ -1864,7 +1864,6 @@ Developers who want to create the executable from source can use the
 
    ```sh
    pip install -r requirements.txt
-   pip install Twitch-Channel-Points-Miner-v2
    ```
 
 7. Run the miner:
