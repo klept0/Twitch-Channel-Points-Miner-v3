@@ -1864,7 +1864,6 @@ Developers who want to create the executable from source can use the
 
    ```sh
    pip install -r requirements.txt
-   pip install Twitch-Channel-Points-Miner-v2
    ```
 
 7. Run the miner:
