@@ -60,8 +60,9 @@ automated build definition.
 ## Docker images
 
 This section explains how to build this project locally and publish it to a
-Docker Hub repository. The tagging follows
-[the Docker deployment workflow](.github/workflows/deploy-docker.yml).
+Docker Hub repository. This fork has no automated Docker publishing; upstream's
+images are built by
+[upstream's Docker deployment workflow](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/blob/master/.github/workflows/deploy-docker.yml).
 
 Docker builds **images**. A container is created later when an image is run.
 
