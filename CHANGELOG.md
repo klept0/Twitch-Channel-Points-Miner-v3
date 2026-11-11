@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.20.0-post.4](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.3...3.20.0-post.4) (2026-11-11)
+
+
+### Features
+
+* **auth:** add an opt-in Android app login for full Drops data ([bf65e07](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/bf65e07c9a9a1a592c015eb8dfe6abb597c876e0))
+* **auth:** add an opt-in Android app login for full Drops data ([#22](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/22)) ([bf65e07](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/bf65e07c9a9a1a592c015eb8dfe6abb597c876e0))
+
 ## [3.20.0-post.3](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.2...3.20.0-post.3) (2026-11-11)
 
 
