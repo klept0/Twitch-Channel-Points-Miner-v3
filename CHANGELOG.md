@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.20.0-post.3](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.2...3.20.0-post.3) (2026-11-11)
+
+
+### Bug Fixes
+
+* **security:** resolve CodeQL overlapping-range and error-exposure alerts ([#20](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/20)) ([cfd82a7](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/cfd82a7998291bee338e0d55956033eff877f035))
+
 ## [3.20.0-post.2](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.1...3.20.0-post.2) (2026-11-11)
 
 
