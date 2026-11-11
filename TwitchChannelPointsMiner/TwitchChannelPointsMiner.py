@@ -573,11 +573,6 @@ class TwitchChannelPointsMiner:
             gql_factory = gql
         else:
             raise ValueError("gql must be None, AttemptStrategy, or GQLFactory")
-        if android_login:
-            logger.info(
-                "Using the Android app login (android_login=True)",
-                extra={"emoji": ":iphone:"},
-            )
         self.twitch = Twitch(
             self.username,
             user_agent,
@@ -699,6 +694,11 @@ class TwitchChannelPointsMiner:
 
         logger.info(f"Twitch Channel Points Miner - {__version__}")
         logger.info(GITHUB_REPOSITORY_URL)
+        if android_login:
+            logger.info(
+                "Using the Android app login (android_login=True)",
+                extra={"emoji": ":iphone:"},
+            )
         self.__check_for_update()
 
         self._register_signal_handlers()

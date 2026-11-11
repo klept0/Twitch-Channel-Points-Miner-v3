@@ -1,6 +1,7 @@
 """Opt-in Android app login (issue #229)."""
 
 import copy
+import importlib
 import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -216,3 +217,39 @@ def test_gql_requests_send_the_login_client_id():
     )
 
     assert headers[0]["Client-Id"] == ANDROID_CLIENT_ID
+
+
+def test_android_login_notice_is_logged_after_the_loggers_exist(tmp_path, monkeypatch):
+    miner_module = importlib.import_module(
+        "TwitchChannelPointsMiner.TwitchChannelPointsMiner"
+    )
+
+    events = []
+
+    class Stop(Exception):
+        pass
+
+    def configure_loggers(username, settings):
+        events.append("loggers")
+        return str(tmp_path / "log.txt"), MagicMock()
+
+    def check_for_update(self):
+        raise Stop
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(miner_module, "configure_loggers", configure_loggers)
+    monkeypatch.setattr(
+        miner_module.logger, "info", lambda message, *a, **k: events.append(message)
+    )
+    monkeypatch.setattr(
+        miner_module.TwitchChannelPointsMiner,
+        "_TwitchChannelPointsMiner__check_for_update",
+        check_for_update,
+    )
+
+    with pytest.raises(Stop):
+        miner_module.TwitchChannelPointsMiner("someone", android_login=True)
+
+    notice = "Using the Android app login (android_login=True)"
+    assert notice in events
+    assert events.index("loggers") < events.index(notice)
