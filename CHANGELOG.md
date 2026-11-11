@@ -1,5 +1,28 @@
 # Changelog
 
+## [3.20.0-post.1](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0...3.20.0-post.1) (2026-11-11)
+
+
+### Features
+
+* **chat:** notify on gifted subs and optionally thank the gifter ([#16](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/16)) ([f31a44c](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/f31a44c58858edb730949b3b920ceccfdabfde1e))
+
+
+### Bug Fixes
+
+* replace deprecated datetime.utcnow() and close leaked test resources ([#11](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/11)) ([a3ca6fb](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/a3ca6fbafcde6333f50c50917ad015770726f6e0))
+
+
+### Documentation
+
+* add a security policy ([ce5ad7c](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/ce5ad7c4b343ccdee9b59e54fd96f2580e0da0eb))
+* **agents:** explain where the Release-As footer must go ([#15](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/15)) ([647b071](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/647b07185c809b327e3e9db0bbfe8e8c94f6c0a3))
+* **readme:** add the fork maintainer's Ko-fi link ([#6](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/6)) ([e982833](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/e982833a455cebc96da429379ffcbb264b569410))
+* **readme:** fix heading and code-fence spacing, format Termux steps ([#1](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/1)) ([c4d6c87](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/c4d6c879ee510009b80bc96a03096327a7c73b55))
+* **readme:** fix Termux install steps for the v3 fork ([c08b035](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/c08b0357f61163522499781306d0a50e503cef9b))
+* **readme:** restore the banner image in the header ([#10](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/10)) ([b159920](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/b159920f9e3097f6b367034ff690d99e2dd7db0f))
+* **readme:** split reference material into docs/ and refocus the README ([#5](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/5)) ([63ec417](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/63ec417941318ea2fac29a38a7ea71845784362d))
+
 ## [3.20.0](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/compare/3.19.6...3.20.0) (2026-11-10)
 
 
