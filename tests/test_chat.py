@@ -119,9 +119,7 @@ def test_gift_sub_to_us_thanks_when_enabled(monkeypatch, caplog):
 
     records = _gift_records(caplog)
     assert len(records) == 1
-    connection.privmsg.assert_called_once_with(
-        "#somechannel", "Thanks for the sub!"
-    )
+    connection.privmsg.assert_called_once_with("#somechannel", "Thanks for the sub!")
 
 
 def test_gift_sub_logged_but_not_thanked_when_disabled(monkeypatch, caplog):
