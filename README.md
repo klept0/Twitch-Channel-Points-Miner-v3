@@ -1,3 +1,5 @@
+![Twitch Channel Points Miner](https://raw.githubusercontent.com/zarmstrong/Twitch-Channel-Points-Miner-v3/master/assets/banner.png)
+
 # Twitch Channel Points Miner v3
 
 [![Tests](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/actions/workflows/tests.yml/badge.svg)](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/actions/workflows/tests.yml) [![License](https://img.shields.io/github/license/klept0/Twitch-Channel-Points-Miner-v3?style=flat&color=black)](LICENSE) [![GitHub last commit](https://badgen.net/github/last-commit/klept0/Twitch-Channel-Points-Miner-v3?icon=github&iconColor=fff&color=FFFFE0)](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commits/master)
