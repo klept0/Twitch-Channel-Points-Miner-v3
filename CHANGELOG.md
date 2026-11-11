@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.20.0-post.5](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.4...3.20.0-post.5) (2026-11-11)
+
+
+### Bug Fixes
+
+* **login:** log the Android login notice after logging is set up ([#24](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/24)) ([aa6b475](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/aa6b475386b99e3395bc84a10a764378730e1057))
+
 ## [3.20.0-post.4](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.3...3.20.0-post.4) (2026-11-11)
 
 
