@@ -50,6 +50,17 @@ jobs:
         with:
           target-branch: master
 
+      # Fork releases use "prerelease": true only so Release Please keeps the
+      # -post.N suffix (see AGENTS.md, Fork versioning). They are real
+      # releases, so publish them as the latest release, not a pre-release.
+      - name: Publish fork release as latest
+        if: (steps.release_retry_2.outputs.release_created || steps.release_retry_1.outputs.release_created || steps.release.outputs.release_created) == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_retry_2.outputs.tag_name || steps.release_retry_1.outputs.tag_name || steps.release.outputs.tag_name }}
+        run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
+
       - name: Checkout link automation
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

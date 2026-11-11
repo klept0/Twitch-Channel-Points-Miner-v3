@@ -6,6 +6,7 @@
       "release-type": "python",
       "versioning": "prerelease",
       "prerelease-type": "post",
+      "prerelease": true,
       "package-name": "Twitch-Channel-Points-Miner-v2",
       "include-component-in-tag": false,
       "include-v-in-tag": false,
