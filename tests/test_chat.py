@@ -120,7 +120,7 @@ def test_gift_sub_to_us_thanks_when_enabled(monkeypatch, caplog):
     records = _gift_records(caplog)
     assert len(records) == 1
     connection.privmsg.assert_called_once_with(
-        "#somechannel", "Thanks for the gift sub, Gifter_One!"
+        "#somechannel", "Thanks for the sub!"
     )
 
 
@@ -197,7 +197,7 @@ def test_format_gift_sub_message_keeps_unknown_placeholders():
 def test_format_gift_sub_message_falls_back_on_malformed_template():
     assert (
         Chat.format_gift_sub_message("Thanks {", "Bob", "chan", "Tier 1")
-        == "Thanks for the gift sub, Bob!"
+        == "Thanks for the sub!"
     )
 
 

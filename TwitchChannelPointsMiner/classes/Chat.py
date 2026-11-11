@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 _tls_probe_lock = Lock()
 _tls_supported = None
 
-DEFAULT_GIFT_SUB_MESSAGE = "Thanks for the gift sub, {gifter}!"
+DEFAULT_GIFT_SUB_MESSAGE = "Thanks for the sub!"
 # Twitch rejects chat messages longer than 500 characters.
 MAX_CHAT_MESSAGE_LENGTH = 500
 ANONYMOUS_GIFTER_LOGIN = "ananonymousgifter"

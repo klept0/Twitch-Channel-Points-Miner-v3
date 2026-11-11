@@ -100,7 +100,7 @@ ColorPalette(
 | `bet` | BetSettings | Default settings | Configure prediction strategy, limits, filters, and timing. |
 | `chat` | ChatPresence | `ONLINE` | Control when the miner joins IRC chat. |
 | `gift_sub_thanks` | bool | `False` | Send a thank-you message in chat when someone gifts this account a sub there. Requires chat presence. |
-| `gift_sub_message` | str | `"Thanks for the gift sub, {gifter}!"` | Thank-you text. Placeholders: `{gifter}`, `{channel}`, `{tier}`. |
+| `gift_sub_message` | str | `"Thanks for the sub!"` | Thank-you text. Optionally add placeholders `{gifter}`, `{channel}` or `{tier}`, for example `"Thanks for the {tier} sub, {gifter}!"`. |
 
 Allowed values for `chat` are:
 - `ALWAYS` Join in IRC chat and never leave
