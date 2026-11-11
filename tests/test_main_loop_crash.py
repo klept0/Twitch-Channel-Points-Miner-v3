@@ -259,6 +259,56 @@ def test_pool_end_survives_websockets_retired_mid_loop():
     assert closed == [0, 1]
 
 
+def test_pool_end_closes_a_replacement_created_by_an_in_flight_reconnection(
+    monkeypatch,
+):
+    # Reproduces #170: end() snapshotted self.ws mid-reconnection, so the
+    # replacement installed afterwards was never marked or closed.
+    closed = []
+    old = SimpleNamespace(
+        index=0,
+        forced_close=False,
+        is_reconnecting=False,
+        topics=[],
+        is_closed=False,
+        keep_running=True,
+        close=lambda: closed.append("old"),
+    )
+    replacement = SimpleNamespace(
+        index=0,
+        forced_close=False,
+        topics=[],
+        close=lambda: closed.append("replacement"),
+    )
+    pool = _pool([old])
+    old.parent_pool = pool
+    ender = None
+    ender_blocked = None
+
+    def fake_new(self, index):
+        nonlocal ender, ender_blocked
+        ender = threading.Thread(target=pool.end)
+        ender.start()
+        ender.join(timeout=0.2)
+        ender_blocked = ender.is_alive()
+        return replacement
+
+    monkeypatch.setattr(WebSocketsPool, "_WebSocketsPool__new", fake_new)
+    monkeypatch.setattr(
+        WebSocketsPool, "_WebSocketsPool__start", lambda _self, _index: None
+    )
+    monkeypatch.setattr(f"{POOL_MODULE}.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr(f"{POOL_MODULE}.internet_connection_available", lambda: True)
+
+    WebSocketsPool.handle_reconnection(old)
+    ender.join(timeout=5)
+
+    assert ender_blocked is True
+    assert not ender.is_alive()
+    assert replacement.forced_close is True
+    assert closed == ["replacement"]
+
+
 def test_reconnection_replay_skips_a_replacement_retired_while_sleeping(monkeypatch):
     # The replacement can itself be retired during the sleep before topics are
     # replayed; replaying onto its old slot raised IndexError.
@@ -435,3 +485,37 @@ def test_exit_after_crash_only_ends_the_thread_off_the_main_thread():
 
     exit_mock.assert_not_called()
     assert outcome == [1]
+
+
+def test_on_open_closes_a_socket_that_was_force_closed_before_it_started():
+    # run_forever() resets keep_running, so end()'s close() on a replacement
+    # whose thread had not yet entered run_forever was lost and the socket
+    # kept running after shutdown.
+    ws = SimpleNamespace(forced_close=True, close=MagicMock(), is_opened=False)
+
+    WebSocketsPool.on_open(ws)
+
+    ws.close.assert_called_once_with()
+    assert ws.is_opened is False
+
+
+def test_start_does_not_run_a_socket_force_closed_before_its_thread_ran(monkeypatch):
+    ran = []
+    websocket = SimpleNamespace(
+        index=0, forced_close=True, run_forever=lambda **kw: ran.append(kw)
+    )
+    pool = _pool([websocket])
+    threads = []
+    real_thread = threading.Thread
+
+    def capture(*args, **kwargs):
+        thread = real_thread(*args, **kwargs)
+        threads.append(thread)
+        return thread
+
+    monkeypatch.setattr(f"{POOL_MODULE}.Thread", capture)
+
+    pool._WebSocketsPool__start(0)
+    threads[0].join(timeout=5)
+
+    assert ran == []
