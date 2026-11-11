@@ -37,6 +37,11 @@ This repository is a Python Twitch channel points miner. Keep changes focused, p
 - Before merging the Release Please PR, review its generated changelog and release notes for user-facing completeness and expand the summary when a single entry contains several notable changes.
 - Do not enable auto-merge on the Release Please PR because merging it is the action that publishes the combined release.
 
+### Fork versioning
+
+- This fork releases as post-releases of the upstream version it is based on: `3.20.0-post.1`, `3.20.0-post.2`, and so on (Python reads these as `3.20.0.post1`). The number goes up with every fork release, whatever the commit types, so fork versions never collide with upstream's.
+- After syncing a new upstream release (for example `3.21.0`), keep the fork's own values in `.release-please-manifest.json` and `__version__` when resolving conflicts, so Release Please can still find the fork's last release tag. Then start the next fork series by adding a `Release-As: 3.21.0-post.1` footer to the sync commit or the next merged PR.
+
 ### Updating published release notes
 
 - Follow the formatting established by the [3.5.0 release](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/releases/tag/3.5.0) and its predecessor, the [3.4.0 release](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/releases/tag/3.4.0).
