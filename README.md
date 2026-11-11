@@ -240,7 +240,15 @@ Licensed under the [GNU General Public License v3.0](LICENSE).
 - Based on: [Tkd-Alex/Twitch-Channel-Points-Miner-v2](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2)
 - Previous maintainer: [Roman Davydov](https://github.com/rdavydov), whose [v2 fork](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2) this project builds on
 - Upstream v3: [zarmstrong/Twitch-Channel-Points-Miner-v3](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3) by [zarmstrong](https://github.com/zarmstrong)
-- ~~Bet system (Selenium): [ClementRoyer/TwitchAutoCollect-AutoBet](https://github.com/ClementRoyer/TwitchAutoCollect-AutoBet)~~
+
+## Support
+
+If this helps you, give it a ⭐️. Found a bug or have a question?
+[Open an issue](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues).
+
+To support this fork's maintainer, klept0:
+
+[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/its_klept0)
 
 To support the upstream maintainer, zarmstrong:
 
@@ -251,12 +259,3 @@ To support the upstream maintainer, zarmstrong:
 | Bitcoin (BTC) | `bc1qdpg70u7u6fganwtddf9z3uwugkxkpltre4cva3` |
 | Ethereum (ETH) | `0x926fce1Eb65e867Af751a9cB75394DF001b58DF0` |
 | Dogecoin (DOGE) | `DHo26McxeVLFwQmRXdUH7LyHsdEUoVFvga` |
-
-## Support
-
-If this helps you, give it a ⭐️. Found a bug or have a question?
-[Open an issue](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues).
-
-To support this fork's maintainer, klept0:
-
-[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/its_klept0)
