@@ -1,4 +1,4 @@
-![Twitch Channel Points Miner](https://raw.githubusercontent.com/zarmstrong/Twitch-Channel-Points-Miner-v3/master/assets/banner.png)
+![Twitch Channel Points Miner](assets/banner.png)
 
 # Twitch Channel Points Miner v3
 
