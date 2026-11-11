@@ -99,9 +99,13 @@ ColorPalette(
 | `community_goals` | bool | `False` | Contribute the maximum allowed points to community goals. |
 | `bet` | BetSettings | Default settings | Configure prediction strategy, limits, filters, and timing. |
 | `chat` | ChatPresence | `ONLINE` | Control when the miner joins IRC chat. |
+| `gift_sub_thanks` | bool | `False` | Send a thank-you message in chat when someone gifts this account a sub there. Requires chat presence. |
+| `gift_sub_message` | str | `"Thanks for the gift sub, {gifter}!"` | Thank-you text. Placeholders: `{gifter}`, `{channel}`, `{tier}`. |
 
 Allowed values for `chat` are:
 - `ALWAYS` Join in IRC chat and never leave
 - `NEVER` Never join IRC chat
 - `ONLINE` Participate in IRC chat while the streamer is online (leave when offline)
 - `OFFLINE` Participate in IRC chat while the streamer is offline (leave when online)
+
+Gifted subs are only seen in chats the miner has joined, so `chat` must not be `NEVER` and the gift must arrive while the miner is in that chat. Check the channel's chat rules before turning on `gift_sub_thanks`: emote-only, followers-only or subscriber-only modes and bot rules can block or ban automated messages.
