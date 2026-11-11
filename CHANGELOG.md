@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.20.0-post.2](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.1...3.20.0-post.2) (2026-11-11)
+
+
+### Bug Fixes
+
+* **chat:** require TLS 1.2 or newer for Twitch IRC ([#17](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/17)) ([49283ef](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/49283ef2061b5b23e92a338b908b5d9eb2244721))
+* **drops:** escape dots in the Twitch settings-script URL pattern ([49283ef](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/49283ef2061b5b23e92a338b908b5d9eb2244721))
+
 ## [3.20.0-post.1](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0...3.20.0-post.1) (2026-11-11)
 
 
