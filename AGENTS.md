@@ -40,7 +40,8 @@ This repository is a Python Twitch channel points miner. Keep changes focused, p
 ### Fork versioning
 
 - This fork releases as post-releases of the upstream version it is based on: `3.20.0-post.1`, `3.20.0-post.2`, and so on (Python reads these as `3.20.0.post1`). The number goes up with every fork release, whatever the commit types, so fork versions never collide with upstream's.
-- After syncing a new upstream release (for example `3.21.0`), keep the fork's own values in `.release-please-manifest.json` and `__version__` when resolving conflicts, so Release Please can still find the fork's last release tag. Then start the next fork series by adding a `Release-As: 3.21.0-post.1` footer to the sync commit or the next merged PR.
+- After syncing a new upstream release (for example `3.21.0`), keep the fork's own values in `.release-please-manifest.json` and `__version__` when resolving conflicts, so Release Please can still find the fork's last release tag. Then start the next fork series by adding a `Release-As: 3.21.0-post.1` footer to the sync commit or the next merged PR. Prerelease versioning only increments an existing `-post.N` suffix, so without this footer the next release would be a plain `3.21.1`.
+- Put `Release-As:` in the commit message's last paragraph, together with any other trailers such as `Co-Authored-By:`. Release Please ignores it anywhere else.
 
 ### Updating published release notes
 
