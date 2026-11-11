@@ -32,7 +32,7 @@ directory before running it. Launching it opens a desktop window with a
 Dashboard tab (the analytics dashboard, embedded) and a Console tab (the
 miner's live log output, including the Twitch sign-in prompt). The
 executable's first-launch configuration and upgrade behavior are documented
-in the [Windows section](README.md#windows) of the main README.
+in the [Windows guide](docs/windows.md).
 
 To build the per-user Windows installer after building the executable, install
 [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
@@ -211,7 +211,7 @@ docker pull "${IMAGE}:${VERSION}"
 ```
 
 Run it using the configuration and volume mounts documented in the
-[Docker section of the README](README.md#docker).
+[Docker guide](docs/docker.md).
 
 ### Publishing another version
 
