@@ -477,6 +477,9 @@ class TwitchChannelPointsMiner:
         ),
         update_check: bool = True,
         update_check_interval_hours: int | float = 24,
+        # Log in as Twitch's Android app instead of the TV app: Twitch only
+        # returns the full Drops dashboard and campaign details to it (#229).
+        android_login: bool = False,
     ):
 
         # Fixes TypeError: 'NoneType' object is not subscriptable
@@ -509,6 +512,8 @@ class TwitchChannelPointsMiner:
         )
         if not isinstance(update_check, bool):
             raise TypeError("update_check must be a boolean")
+        if not isinstance(android_login, bool):
+            raise TypeError("android_login must be a boolean")
         update_check_interval_hours = _normalize_update_check_interval(
             update_check_interval_hours
         )
@@ -568,7 +573,17 @@ class TwitchChannelPointsMiner:
             gql_factory = gql
         else:
             raise ValueError("gql must be None, AttemptStrategy, or GQLFactory")
-        self.twitch = Twitch(self.username, user_agent, gql_factory=gql_factory)
+        if android_login:
+            logger.info(
+                "Using the Android app login (android_login=True)",
+                extra={"emoji": ":iphone:"},
+            )
+        self.twitch = Twitch(
+            self.username,
+            user_agent,
+            gql_factory=gql_factory,
+            android_login=android_login,
+        )
 
         self.claim_drops_startup = claim_drops_startup
         self.priority = priority if isinstance(priority, list) else [priority]

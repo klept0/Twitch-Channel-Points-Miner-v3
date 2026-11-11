@@ -52,6 +52,7 @@ from TwitchChannelPointsMiner.classes.Exceptions import (
     CategoryLookupFailedException,
     StreamerDoesNotExistException,
     StreamerIsOfflineException,
+    WrongCookiesException,
 )
 from TwitchChannelPointsMiner.classes.gql.Errors import (
     RetryError,
@@ -69,10 +70,12 @@ from TwitchChannelPointsMiner.classes.StreamSegmentWatcher import StreamSegmentW
 from TwitchChannelPointsMiner.classes.TwitchDropsApp import TwitchDropsAppScraper
 from TwitchChannelPointsMiner.classes.TwitchLogin import TwitchLogin
 from TwitchChannelPointsMiner.constants import (
+    ANDROID_CLIENT_ID,
     CLIENT_ID,
     CLIENT_VERSION,
     DROP_ID,
     URL,
+    USER_AGENTS,
     GQLOperations,
 )
 from TwitchChannelPointsMiner.data_migration import ANALYTICS_DATA_VERSION
@@ -263,7 +266,7 @@ class Twitch(object):
         "stream_segment_watchers",
     ]
 
-    def __init__(self, username, user_agent, gql_factory=None):
+    def __init__(self, username, user_agent, gql_factory=None, android_login=False):
         if (
             not isinstance(username, str)
             or re.fullmatch(r"[A-Za-z0-9_]{1,25}", username) is None
@@ -271,13 +274,19 @@ class Twitch(object):
             raise ValueError("Invalid Twitch username")
         cookies_path = os.path.join(Path().absolute(), "cookies")
         Path(cookies_path).mkdir(parents=True, exist_ok=True)
-        self.cookies_file = os.path.join(cookies_path, f"{username}.pkl")
+        # A token only works with the client that issued it, so the Android
+        # login keeps its own cookie file ("-" can't occur in a username).
+        cookie_name = f"{username}-android" if android_login else username
+        self.cookies_file = os.path.join(cookies_path, f"{cookie_name}.pkl")
+        client_id = ANDROID_CLIENT_ID if android_login else CLIENT_ID
+        if android_login:
+            user_agent = USER_AGENTS["Android"]["App"]
         self.user_agent = user_agent
         self.device_id = "".join(
             choice(string.ascii_letters + string.digits) for _ in range(32)
         )
         self.twitch_login = TwitchLogin(
-            CLIENT_ID, self.device_id, username, self.user_agent
+            client_id, self.device_id, username, self.user_agent
         )
         self.running = True
         # self.integrity = None
@@ -1280,10 +1289,21 @@ class Twitch(object):
         )
         return saved
 
+    def __client_id(self):
+        """The client ID that issued the login token (TV, or Android when
+        android_login is on); Twitch rejects a token sent with another."""
+        return getattr(getattr(self, "twitch_login", None), "client_id", CLIENT_ID)
+
     def login(self):
         if not os.path.isfile(self.cookies_file):
             if self.twitch_login.login_flow():
                 self.twitch_login.save_cookies(self.cookies_file)
+            elif self.__client_id() == ANDROID_CLIENT_ID:
+                # Unlike the TV flow, nothing here can wait for the user:
+                # without a token every request would fail.
+                raise WrongCookiesException(
+                    "Android login failed; see the messages above"
+                )
         else:
             self.twitch_login.load_cookies(self.cookies_file)
             self.twitch_login.set_token(self.twitch_login.get_auth_token())
@@ -4196,7 +4216,7 @@ class Twitch(object):
                 params=params,
                 headers={
                     "Authorization": f"Bearer {self.twitch_login.get_auth_token()}",
-                    "Client-Id": CLIENT_ID,
+                    "Client-Id": self.__client_id(),
                     "User-Agent": self.user_agent,
                 },
                 timeout=20,
@@ -5492,7 +5512,7 @@ class Twitch(object):
                 json={},
                 headers={
                     "Authorization": f"OAuth {self.twitch_login.get_auth_token()}",
-                    "Client-Id": CLIENT_ID,
+                    "Client-Id": self.__client_id(),
                     "Client-Session-Id": self.client_session,
                     "Client-Version": self.update_client_version(),
                     "User-Agent": self.user_agent,
