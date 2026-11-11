@@ -102,6 +102,7 @@ You'll need:
 - Windows 10 or 11, for the Windows executable path.
 
 ### Limits
+
 _**Twitch has a limit - you can't watch more than two channels at one time. Set
 `streams_watched` to `1` or `2` in `MINER_CONFIG` to control how many are watched
 concurrently; the default is `2`. The highest-priority streamers are selected.**_
@@ -784,6 +785,7 @@ status are written to `supervisor-logs/`.
 ## Docker reference
 
 ### Docker Hub
+
 Official Docker images are on https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner for `linux/amd64` and `linux/arm64`. The same tags are also published to the legacy https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner-v2 repository so existing installations continue to receive updates.
 
 The ARM64 image can run in compatible 64-bit Android Linux environments where
@@ -838,6 +840,7 @@ services:
 ```
 
 **Example with docker run:**
+
 ```sh
 docker run \
     --restart unless-stopped \
@@ -932,6 +935,7 @@ and updates.
 This repository does not currently maintain an official Replit deployment.
 
 ## Settings
+
 Most settings are documented inline in [config.example.py](config.example.py).
 The `priority` option controls which eligible streamers receive the available
 watch slots. It accepts one `Priority` value or an ordered list. Include at least
@@ -986,6 +990,7 @@ and include `Priority.FAVORITE` to reserve watch slots for favorites first.
 | `daily_report_time` | str | `"00:00"` | Local delivery time for the daily report, in 24-hour `HH:MM` format. |
 
 #### Color Palette
+
 `ColorPalette` customizes console colors by event name. Unspecified events use
 `Fore.RESET`, while prediction wins and losses default to green and red. The
 *Watching for points* status line has its own `WATCH_STATUS` key, which
@@ -995,6 +1000,7 @@ to notifiers. The palette applies only with `colored=True`; with
 as in earlier releases. Values
 may be Colorama constants or case-insensitive color names: `BLACK`, `RED`,
 `GREEN`, `YELLOW`, `BLUE`, `MAGENTA`, `CYAN`, `WHITE`, or `RESET`.
+
 ```python
 from colorama import Fore
 ColorPalette(
@@ -1480,6 +1486,7 @@ For access from another machine, bind to `0.0.0.0` and provide a strong
 configured Twitch username and analytics password. The built-in server uses
 plain HTTP, so expose it only on a trusted network or behind an HTTPS reverse
 proxy. Background and design context are available in [issue #96](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/96).
+
 ```python
 MINER_CONFIG = {
     "username": "your-twitch-username",
@@ -1701,6 +1708,7 @@ previously valid saved token, the miner clears the cached login and restarts so
 that reauthentication can occur; follow the instructions printed in the logs.
 
 ## Windows
+
 The Windows executable does not require Python, Git, or Command Prompt.
 
 ### Standard vs. portable
@@ -1813,47 +1821,57 @@ Developers who want to create the executable from source can use the
 [Windows build guide](BUILD.md#windows-executable).
 
 ## Termux
+
 > [!WARNING]
 > These instructions are outdated and have not been tested with the v3 miner.
 > They may not work and could cause unexpected problems. Use them at your own
 > risk.
 
-**1. Upgrade packages**
-```
-pkg upgrade
-```
+1. Upgrade packages:
 
-**2. Install packages to Termux**
-```
-pkg install python git libcrypt ndk-sysroot clang zlib binutils
-LDFLAGS="-L${PREFIX}/lib/" CFLAGS="-I${PREFIX}/include/" pip install --upgrade wheel
-```
+   ```sh
+   pkg upgrade
+   ```
 
-**3. Clone this repository**
+2. Install packages to Termux:
 
-`git clone https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3`
+   ```sh
+   pkg install python git libcrypt ndk-sysroot clang zlib binutils
+   LDFLAGS="-L${PREFIX}/lib/" CFLAGS="-I${PREFIX}/include/" pip install --upgrade wheel
+   ```
 
-**4. Go to the miner's directory**
+3. Clone this repository:
 
-`cd Twitch-Channel-Points-Miner-v3`
+   ```sh
+   git clone https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3
+   ```
 
-**5. Create and edit the configuration**
+4. Go to the miner's directory:
 
-```sh
-mkdir -p config
-cp config.example.py config/config.py
-nano config/config.py
-```
+   ```sh
+   cd Twitch-Channel-Points-Miner-v3
+   ```
 
-**6. Install packages**
-```
-pip install -r requirements.txt
-pip install Twitch-Channel-Points-Miner-v2
-```
+5. Create and edit the configuration:
 
-**7. Run the miner!**
+   ```sh
+   mkdir -p config
+   cp config.example.py config/config.py
+   nano config/config.py
+   ```
 
-`python -m TwitchChannelPointsMiner.runner --config-dir ./config`
+6. Install packages:
+
+   ```sh
+   pip install -r requirements.txt
+   pip install Twitch-Channel-Points-Miner-v2
+   ```
+
+7. Run the miner:
+
+   ```sh
+   python -m TwitchChannelPointsMiner.runner --config-dir ./config
+   ```
 
 Read more at [#92](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/92) [#76](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/76)
 
