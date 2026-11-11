@@ -21,7 +21,7 @@ jobs:
       - name: Run Release Please
         id: release
         continue-on-error: true
-        uses: googleapis/release-please-action@v5
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           target-branch: master
 
@@ -34,7 +34,7 @@ jobs:
         if: steps.release.outcome == 'failure'
         id: release_retry_1
         continue-on-error: true
-        uses: googleapis/release-please-action@v5
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           target-branch: master
 
@@ -46,12 +46,12 @@ jobs:
       - name: Run final Release Please attempt
         if: steps.release.outcome == 'failure' && steps.release_retry_1.outcome == 'failure'
         id: release_retry_2
-        uses: googleapis/release-please-action@v5
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           target-branch: master
 
       - name: Checkout link automation
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -61,7 +61,7 @@ jobs:
       - name: Link PR references in release notes
         # Cosmetic; never block the release or Windows jobs.
         continue-on-error: true
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           RELEASE_TAG: ${{ steps.release_retry_2.outputs.tag_name || steps.release_retry_1.outputs.tag_name || steps.release.outputs.tag_name }}
         with:
@@ -85,12 +85,12 @@ jobs:
       issues: write
     steps:
       - name: Checkout released automation
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.release_please.outputs.tag_name }}
 
       - name: Close issues included in the release
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           RELEASE_TAG: ${{ needs.release_please.outputs.tag_name }}
         with:
@@ -114,12 +114,12 @@ jobs:
         flavor: [standard, portable]
     steps:
       - name: Checkout released source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.release_please.outputs.tag_name }}
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.14'
 
@@ -154,7 +154,7 @@ jobs:
           }
 
       - name: Upload built executable
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-exe-${{ matrix.flavor }}
           path: dist/TwitchChannelPointsMiner*.exe
@@ -169,18 +169,18 @@ jobs:
       contents: write
     steps:
       - name: Checkout released source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.release_please.outputs.tag_name }}
 
       - name: Download standard executable
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows-exe-standard
           path: dist
 
       - name: Download portable executable
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows-exe-portable
           path: dist
@@ -220,7 +220,7 @@ jobs:
           "installer_path=dist/TwitchChannelPointsMiner-$version-Setup.exe" >> $env:GITHUB_OUTPUT
 
       - name: Upload Windows artifacts to release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ needs.release_please.outputs.tag_name }}
           files: |
