@@ -1,6 +1,5 @@
 import builtins
 import http.server
-import json
 import logging
 import os
 import shutil
@@ -1965,59 +1964,6 @@ def test_close_confirmation_does_not_stop_the_miner_when_cancelled():
     assert miner.calls == []
 
 
-def test_close_confirmation_notifies_shutting_down_via_tray_when_confirmed():
-    handle = windows_launcher._MinerThreadHandle()
-    handle.thread = _FakeMinerThread(alive=True)
-    handle.set_miner(_FakeMiner())
-    tray_icon = _FakeTrayIcon()
-
-    handler = windows_launcher._make_close_confirmation_handler(
-        _FakeWindowConfirms(), handle, tray_icon=tray_icon
-    )
-
-    assert handler() is True
-    assert len(tray_icon.notifications) == 1
-    message, title = tray_icon.notifications[0]
-    assert title == "Twitch Channel Points Miner"
-    assert "shutting down" in message.lower()
-
-
-def test_close_confirmation_does_not_notify_when_cancelled():
-    class FakeWindow:
-        def create_confirmation_dialog(self, title, message):
-            return False
-
-    handle = windows_launcher._MinerThreadHandle()
-    handle.thread = _FakeMinerThread(alive=True)
-    handle.set_miner(_FakeMiner())
-    tray_icon = _FakeTrayIcon()
-
-    handler = windows_launcher._make_close_confirmation_handler(
-        FakeWindow(), handle, tray_icon=tray_icon
-    )
-
-    assert handler() is False
-    assert tray_icon.notifications == []
-
-
-def test_close_confirmation_survives_a_shutdown_notify_failure():
-    handle = windows_launcher._MinerThreadHandle()
-    handle.thread = _FakeMinerThread(alive=True)
-    miner = _FakeMiner()
-    handle.set_miner(miner)
-
-    class BrokenTrayIcon:
-        def notify(self, message, title=None):
-            raise RuntimeError("notifications unsupported on this backend")
-
-    handler = windows_launcher._make_close_confirmation_handler(
-        _FakeWindowConfirms(), handle, tray_icon=BrokenTrayIcon()
-    )
-
-    assert handler() is True
-    assert miner.calls == [(None, None)]
-
-
 def test_stop_miner_gracefully_does_nothing_without_a_registered_miner():
     handle = windows_launcher._MinerThreadHandle()
 
@@ -2099,8 +2045,7 @@ class _FakeEventSlot:
     running them all synchronously and returning True if any of them
     returned False - matching should_lock=True's behavior for
     window.events.closing specifically, including that multiple handlers
-    are genuinely supported (production code relies on this to swap the
-    tray Quit confirmation in for the normal hide-to-tray handler)."""
+    are genuinely supported."""
 
     def __init__(self):
         self._items = []
@@ -2130,6 +2075,7 @@ class _FakeEvents:
         self.closing = _FakeEventSlot()
         self.minimized = _FakeEventSlot()
         self.restored = _FakeEventSlot()
+        self.maximized = _FakeEventSlot()
 
 
 class _FakeWindow:
@@ -2137,6 +2083,7 @@ class _FakeWindow:
         self.events = _FakeEvents()
         self.hidden = False
         self.destroyed = False
+        self.restore_calls = 0
 
     def show(self):
         self.hidden = False
@@ -2144,11 +2091,14 @@ class _FakeWindow:
     def hide(self):
         self.hidden = True
 
+    def restore(self):
+        self.restore_calls += 1
+
     def destroy(self):
         # Mirrors real WinForms semantics: Close() fires FormClosing (here,
         # events.closing.set()) and only actually closes if no handler
-        # vetoes it - the same mechanism the window's own close button
-        # already relies on to turn a close into a hide instead.
+        # vetoes it - the same mechanism the close confirmation relies on to
+        # cancel a close.
         if self.events.closing.set():
             return
         self.destroyed = True
@@ -2240,7 +2190,7 @@ def test_launch_shell_passes_the_bundled_icon_to_webview_start(tmp_path, monkeyp
 
     assert fake_webview.start_icon == str(
         windows_launcher.bundled_file(
-            os.path.join("assets", windows_launcher._TRAY_ICON_FILE)
+            os.path.join("assets", windows_launcher._WINDOW_ICON_FILE)
         )
     )
 
@@ -2631,83 +2581,15 @@ def test_main_installer_style_disabled_config_shows_disabled_flow_end_to_end(
     assert shell_calls == [(None, None)]
 
 
-# --- Tray icon / minimize-to-tray ---------------------------------------
+# --- Closing the window ---------------------------------------------------
 
 
-def test_hide_to_tray_handler_hides_window_and_cancels_the_close():
-    class FakeWindow:
-        def __init__(self):
-            self.hidden = False
-
-        def hide(self):
-            self.hidden = True
-
-    window = FakeWindow()
-    tray_icon = _FakeTrayIcon()
-    handler = windows_launcher._make_hide_to_tray_handler(window, tray_icon)
-
-    assert handler() is False
-    assert window.hidden is True
-    assert tray_icon.notifications == [
-        (
-            "Still running and mining in the background. "
-            "Use the tray icon's Quit to stop it.",
-            "Twitch Channel Points Miner",
-        )
-    ]
-
-
-def test_hide_to_tray_handler_survives_a_notify_failure():
-    class FakeWindow:
-        def hide(self):
-            pass
-
-    class BrokenTrayIcon:
-        def notify(self, message, title=None):
-            raise RuntimeError("notifications unsupported on this backend")
-
-    handler = windows_launcher._make_hide_to_tray_handler(
-        FakeWindow(), BrokenTrayIcon()
-    )
-
-    assert handler() is False
-
-
-class _FakeTrayIcon:
-    def __init__(self):
-        self.ran = False
-        self.stopped = False
-        self.notifications = []
-
-    def run(self):
-        self.ran = True
-
-    def stop(self):
-        self.stopped = True
-
-    def notify(self, message, title=None):
-        self.notifications.append((message, title))
-
-
-def _patch_tray_unavailable(monkeypatch):
-    def _raise(on_show, on_quit):
-        raise ImportError("No module named 'pystray'")
-
-    monkeypatch.setattr(windows_launcher, "_build_tray_icon", _raise)
-
-
-def test_launch_shell_falls_back_to_close_confirmation_when_tray_unavailable(
-    tmp_path, monkeypatch
-):
-    # No pystray available (the real, un-mocked case for CI/Linux) -
-    # launch_shell must still leave the window closable. Forced explicitly so
-    # the test also holds on a Windows dev machine with pystray installed.
+def test_launch_shell_close_button_uses_close_confirmation(tmp_path, monkeypatch):
     fake_webview = _FakeWebview()
     _patch_fake_webview(monkeypatch, fake_webview)
     monkeypatch.setattr(
         windows_launcher, "_maybe_prompt_to_enable_analytics", lambda *a: None
     )
-    _patch_tray_unavailable(monkeypatch)
 
     windows_launcher.launch_shell(
         None,
@@ -2722,38 +2604,9 @@ def test_launch_shell_falls_back_to_close_confirmation_when_tray_unavailable(
     )
 
     assert callable(fake_webview.window.events.closing.handler)
-    # The fallback handler is the old confirm-on-close one: with no miner
+    # The close button always goes through confirm-on-close: with no miner
     # running it allows the close outright.
     assert fake_webview.window.events.closing.handler() is True
-
-
-def test_launch_shell_wires_hide_to_tray_when_tray_is_available(tmp_path, monkeypatch):
-    fake_webview = _FakeWebview()
-    _patch_fake_webview(monkeypatch, fake_webview)
-    monkeypatch.setattr(
-        windows_launcher, "_maybe_prompt_to_enable_analytics", lambda *a: None
-    )
-    fake_icon = _FakeTrayIcon()
-    monkeypatch.setattr(
-        windows_launcher, "_build_tray_icon", lambda on_show, on_quit: fake_icon
-    )
-
-    windows_launcher.launch_shell(
-        None,
-        windows_launcher.ConsoleBuffer(),
-        None,
-        _FakeMinerThread(alive=True),
-        tmp_path / "config.py",
-        tmp_path / ".shell_analytics_prompt_shown",
-        False,
-        lambda: None,
-        None,
-    )
-
-    # Closing the window now just hides it - never a "stop mining?" prompt.
-    window = fake_webview.window
-    assert window.events.closing.handler() is False
-    assert getattr(window, "hidden", False) is True
 
 
 def test_launch_shell_logs_minimize_and_restore_events(tmp_path, monkeypatch, caplog):
@@ -2786,265 +2639,19 @@ def test_launch_shell_logs_minimize_and_restore_events(tmp_path, monkeypatch, ca
     assert "restored" in caplog.text.lower()
 
 
-def test_launch_shell_logs_when_close_button_hides_to_tray(
-    tmp_path, monkeypatch, caplog
-):
-    fake_webview = _FakeWebview()
-    _patch_fake_webview(monkeypatch, fake_webview)
-    monkeypatch.setattr(
-        windows_launcher, "_maybe_prompt_to_enable_analytics", lambda *a: None
-    )
-    fake_icon = _FakeTrayIcon()
-    monkeypatch.setattr(
-        windows_launcher, "_build_tray_icon", lambda on_show, on_quit: fake_icon
-    )
-
-    with caplog.at_level(logging.INFO, logger="windows_launcher"):
-        windows_launcher.launch_shell(
-            None,
-            windows_launcher.ConsoleBuffer(),
-            None,
-            _FakeMinerThread(alive=True),
-            tmp_path / "config.py",
-            tmp_path / ".shell_analytics_prompt_shown",
-            False,
-            lambda: None,
-            None,
-        )
-        fake_webview.window.events.closing.handler()
-
-    assert "hiding the window to the tray" in caplog.text.lower()
-
-
-def test_launch_shell_logs_when_tray_is_unavailable(tmp_path, monkeypatch, caplog):
-    fake_webview = _FakeWebview()
-    _patch_fake_webview(monkeypatch, fake_webview)
-    monkeypatch.setattr(
-        windows_launcher, "_maybe_prompt_to_enable_analytics", lambda *a: None
-    )
-
-    def _raise(on_show, on_quit):
-        raise RuntimeError("no tray on this desktop")
-
-    monkeypatch.setattr(windows_launcher, "_build_tray_icon", _raise)
-
-    with caplog.at_level(logging.INFO, logger="windows_launcher"):
-        windows_launcher.launch_shell(
-            None,
-            windows_launcher.ConsoleBuffer(),
-            None,
-            _FakeMinerThread(alive=False),
-            tmp_path / "config.py",
-            tmp_path / ".shell_analytics_prompt_shown",
-            False,
-            lambda: None,
-            None,
-        )
-
-    assert "system tray icon unavailable" in caplog.text.lower()
-
-
-def _launch_shell_with_tray(tmp_path, monkeypatch, miner_alive=True):
-    fake_webview = _FakeWebview()
-    _patch_fake_webview(monkeypatch, fake_webview)
-    monkeypatch.setattr(
-        windows_launcher, "_maybe_prompt_to_enable_analytics", lambda *a: None
-    )
-
-    captured = {}
-    tray_icon = _FakeTrayIcon()
-
-    def fake_build_tray_icon(on_show, on_quit):
-        captured["on_show"] = on_show
-        captured["on_quit"] = on_quit
-        return tray_icon
-
-    monkeypatch.setattr(windows_launcher, "_build_tray_icon", fake_build_tray_icon)
-
-    handle = windows_launcher._MinerThreadHandle()
-    handle.thread = _FakeMinerThread(alive=miner_alive)
-    miner = _FakeMiner()
-    handle.set_miner(miner)
-
-    windows_launcher.launch_shell(
-        None,
-        windows_launcher.ConsoleBuffer(),
-        None,
-        handle,
-        tmp_path / "config.py",
-        tmp_path / ".shell_analytics_prompt_shown",
-        False,
-        lambda: None,
-        None,
-    )
-
-    return fake_webview.window, captured, tray_icon, miner
-
-
-def test_launch_shell_quit_from_tray_stops_miner_and_destroys_window(
-    tmp_path, monkeypatch
-):
-    window, captured, tray_icon, miner = _launch_shell_with_tray(tmp_path, monkeypatch)
-    hide_handler = window.events.closing.handler
-    dialog_calls = []
-
-    def fake_dialog(title, message):
-        # Must run only once the hide handler has been swapped out -
-        # otherwise a real WinForms FormClosing veto from a leftover hide
-        # handler could cancel the close before this is even reached. This
-        # is what actually broke before: create_confirmation_dialog was
-        # called directly from pystray's own thread, unmarshaled, and could
-        # leave the app stuck after being answered - see
-        # _confirm_and_quit_from_tray's docstring.
-        dialog_calls.append(hide_handler not in window.events.closing._items)
-        return True
-
-    window.create_confirmation_dialog = fake_dialog
-
-    captured["on_quit"]()
-
-    assert dialog_calls == [True]
-    assert miner.calls == [(None, None)]
-    assert window.destroyed is True
-    assert tray_icon.stopped is True
-
-
-def test_launch_shell_quit_from_tray_shows_shutting_down_notification(
-    tmp_path, monkeypatch
-):
-    """The tray-Quit path is where users actually experience the multi-
-    minute graceful shutdown (IRC leave, websocket teardown, watcher joins)
-    freezing the window - see _stop_miner_gracefully's docstring. A tray
-    notification fired before that blocking work starts is the only
-    feedback the user gets that it's still working rather than stuck."""
-    window, captured, tray_icon, miner = _launch_shell_with_tray(tmp_path, monkeypatch)
-    window.create_confirmation_dialog = lambda title, message: True
-
-    captured["on_quit"]()
-
-    assert miner.calls == [(None, None)]
-    assert len(tray_icon.notifications) == 1
-    message, title = tray_icon.notifications[0]
-    assert title == "Twitch Channel Points Miner"
-    assert "shutting down" in message.lower()
-
-
-def test_launch_shell_quit_from_tray_reentrant_close_is_cancelled(
-    tmp_path, monkeypatch
-):
-    """A second close attempt while the tray-Quit confirmation dialog is
-    still open (e.g. the window's own [X] clicked again) must be cancelled
-    outright, not reach create_confirmation_dialog or destroy() a second
-    time. A real, unowned WinForms MessageBox doesn't block clicks from
-    reaching the underlying form, so this reentrant FormClosing is a real
-    scenario - letting it through used to close/dispose the window from
-    inside the nested call and crash once the outer call resumed and tried
-    to close it again (pywebview raising KeyError on its window-instance
-    table). See _make_close_confirmation_handler's docstring."""
-    window, captured, tray_icon, miner = _launch_shell_with_tray(tmp_path, monkeypatch)
-    dialog_calls = []
-
-    def fake_dialog(title, message):
-        dialog_calls.append(1)
-        reentrant_cancelled = window.events.closing.set()
-        assert reentrant_cancelled is True
-        return True
-
-    window.create_confirmation_dialog = fake_dialog
-
-    captured["on_quit"]()
-
-    assert dialog_calls == [1]
-    assert miner.calls == [(None, None)]
-    assert window.destroyed is True
-    assert tray_icon.stopped is True
-
-
-def test_launch_shell_quit_from_tray_cancelled_restores_hide_to_tray(
-    tmp_path, monkeypatch
-):
-    window, captured, tray_icon, miner = _launch_shell_with_tray(tmp_path, monkeypatch)
-    hide_handler = window.events.closing.handler
-    window.create_confirmation_dialog = (
-        lambda title, message: False
-    )  # User clicks Cancel.
-
-    captured["on_quit"]()
-
-    assert window.destroyed is False
-    assert tray_icon.stopped is False
-    assert miner.calls == []
-    # The window must still hide-to-tray normally afterward, not be left
-    # with no closing handler at all (or the cancelled one-shot confirm
-    # handler still wired in).
-    assert window.events.closing.handler is hide_handler
-    assert window.events.closing.handler() is False
-    assert window.hidden is True
-
-
-def test_launch_shell_tray_show_is_ignored_while_quit_confirmation_is_open(
-    tmp_path, monkeypatch
-):
-    """Regression test for a real crash: pystray's Show item calls
-    window.show(), which marshals onto the GUI thread via Control.Invoke -
-    a call a nested modal message loop (like WinForms' MessageBox.Show,
-    used for the "Stop mining?" confirmation) still pumps, since an
-    unowned MessageBox doesn't stop other threads' marshaled calls from
-    reaching the form. A Show landing while the window is mid-teardown
-    crashed pywebview (KeyError on its window-instance table - the same
-    shape of bug as the reentrant-close case above, just reached via Show
-    instead of a second Close). The `on_show` passed to the tray icon must
-    ignore Show while a quit is in progress - see
-    _make_close_confirmation_handler's docstring on `quitting`."""
-    window, captured, tray_icon, miner = _launch_shell_with_tray(tmp_path, monkeypatch)
-    window.hidden = True
-
-    def fake_dialog(title, message):
-        captured["on_show"]()  # A concurrent tray "Show" click, simulated.
-        return True
-
-    window.create_confirmation_dialog = fake_dialog
-
-    captured["on_quit"]()
-
-    assert window.hidden is True  # Show never actually ran.
-    assert window.destroyed is True
-    assert tray_icon.stopped is True
-
-
-def test_launch_shell_tray_show_works_again_after_quit_is_cancelled(
-    tmp_path, monkeypatch
-):
-    window, captured, tray_icon, miner = _launch_shell_with_tray(tmp_path, monkeypatch)
-    window.hidden = True
-    window.create_confirmation_dialog = (
-        lambda title, message: False
-    )  # User clicks Cancel.
-
-    captured["on_quit"]()
-    captured["on_show"]()
-
-    assert window.hidden is False
-
-
 def test_launch_shell_wires_guarded_show_into_single_instance_listener(
     tmp_path, monkeypatch
 ):
-    """Regression test for a coverage gap: launch_shell must hand
-    _start_single_instance_listener the same quitting-guarded show as the
-    tray's on_show, not a raw window.show - otherwise a second-launch ping
-    landing during a quit confirmation dialog reintroduces, for that call
-    site, the exact race _guarded_show exists to close. The tray path has
-    test_launch_shell_tray_show_is_ignored_while_quit_confirmation_is_open;
-    nothing previously exercised this one, so a future accidental revert to
+    """launch_shell must hand _start_single_instance_listener a
+    quitting-guarded show, not a raw window.show - otherwise a second-launch
+    ping landing during a quit confirmation dialog reintroduces the exact
+    race _guarded_show exists to close, and a future accidental revert to
     _start_single_instance_listener(window.show) would pass the whole suite."""
     fake_webview = _FakeWebview()
     _patch_fake_webview(monkeypatch, fake_webview)
     monkeypatch.setattr(
         windows_launcher, "_maybe_prompt_to_enable_analytics", lambda *a: None
     )
-    # The close below must go through the quit confirmation, not hide-to-tray.
-    _patch_tray_unavailable(monkeypatch)
 
     captured = {}
     monkeypatch.setattr(
@@ -3079,52 +2686,113 @@ def test_launch_shell_wires_guarded_show_into_single_instance_listener(
     assert window.hidden is True  # Ignored - not the raw, unguarded window.show.
 
 
-def test_build_tray_icon_uses_bundled_icon_file(monkeypatch):
-    opened = {}
-
-    class FakeImage:
-        @staticmethod
-        def open(path):
-            opened["path"] = path
-            return "the-image"
-
-    class FakeMenuItem:
-        def __init__(self, text, action, default=False):
-            self.text = text
-            self.action = action
-            self.default = default
-
-    class FakeMenu:
-        def __init__(self, *items):
-            self.items = items
-
-    class FakeIcon:
-        def __init__(self, name, image, title, menu):
-            self.name = name
-            self.image = image
-            self.title = title
-            self.menu = menu
-
-    fake_pystray = types.SimpleNamespace(
-        Menu=FakeMenu, MenuItem=FakeMenuItem, Icon=FakeIcon
+def test_launch_shell_single_instance_show_works_again_after_quit_is_cancelled(
+    tmp_path, monkeypatch
+):
+    fake_webview = _FakeWebview()
+    _patch_fake_webview(monkeypatch, fake_webview)
+    monkeypatch.setattr(
+        windows_launcher, "_maybe_prompt_to_enable_analytics", lambda *a: None
     )
-    # `Image` set directly on the fake "PIL" package so `from PIL import
-    # Image` resolves via a plain hasattr() check, without the real import
-    # system needing to locate an actual "PIL.Image" submodule.
-    monkeypatch.setitem(
-        windows_launcher.sys.modules, "PIL", types.SimpleNamespace(Image=FakeImage)
+
+    captured = {}
+    monkeypatch.setattr(
+        windows_launcher,
+        "_start_single_instance_listener",
+        lambda show: captured.__setitem__("show", show),
     )
-    monkeypatch.setitem(windows_launcher.sys.modules, "pystray", fake_pystray)
 
-    icon = windows_launcher._build_tray_icon(lambda: None, lambda: None)
+    handle = windows_launcher._MinerThreadHandle()
+    handle.thread = _FakeMinerThread(alive=True)
+    handle.set_miner(_FakeMiner())
 
-    assert icon.image == "the-image"
-    assert str(opened["path"]).endswith(windows_launcher._TRAY_ICON_FILE)
-    assert [item.text for item in icon.menu.items] == ["Show", "Quit"]
-    # "Show" must be pystray's default item - on Windows that's what makes
-    # double-clicking the tray icon itself (not just opening its menu) show
-    # the window; otherwise a double-click does nothing.
-    assert [item.default for item in icon.menu.items] == [True, False]
+    windows_launcher.launch_shell(
+        None,
+        windows_launcher.ConsoleBuffer(),
+        None,
+        handle,
+        tmp_path / "config.py",
+        tmp_path / ".shell_analytics_prompt_shown",
+        False,
+        lambda: None,
+        None,
+    )
+
+    window = fake_webview.window
+    window.create_confirmation_dialog = lambda title, message: False  # Cancels.
+    window.hidden = True
+
+    assert window.events.closing.set() is True  # Close cancelled.
+    captured["show"]()
+
+    assert window.hidden is False  # Guard cleared on cancel, so Show works.
+
+
+def _launch_shell_capturing_show(tmp_path, monkeypatch, start_minimized=False):
+    fake_webview = _FakeWebview()
+    _patch_fake_webview(monkeypatch, fake_webview)
+    monkeypatch.setattr(
+        windows_launcher, "_maybe_prompt_to_enable_analytics", lambda *a: None
+    )
+    captured = {}
+    monkeypatch.setattr(
+        windows_launcher,
+        "_start_single_instance_listener",
+        lambda show: captured.__setitem__("show", show),
+    )
+    windows_launcher.launch_shell(
+        None,
+        windows_launcher.ConsoleBuffer(),
+        None,
+        _FakeMinerThread(alive=False),
+        tmp_path / "config.py",
+        tmp_path / ".shell_analytics_prompt_shown",
+        False,
+        lambda: None,
+        None,
+        start_minimized=start_minimized,
+    )
+    return fake_webview.window, captured["show"]
+
+
+def test_single_instance_show_restores_a_window_started_minimized(
+    tmp_path, monkeypatch
+):
+    window, show = _launch_shell_capturing_show(
+        tmp_path, monkeypatch, start_minimized=True
+    )
+
+    show()
+
+    assert window.restore_calls == 1
+
+
+def test_single_instance_show_restores_a_window_the_user_minimized(
+    tmp_path, monkeypatch
+):
+    window, show = _launch_shell_capturing_show(tmp_path, monkeypatch)
+    window.events.minimized.set()
+
+    show()
+
+    assert window.restore_calls == 1
+
+
+def test_single_instance_show_does_not_restore_a_normal_or_maximized_window(
+    tmp_path, monkeypatch
+):
+    window, show = _launch_shell_capturing_show(
+        tmp_path, monkeypatch, start_minimized=True
+    )
+    window.events.restored.set()
+    show()
+    window.events.minimized.set()
+    window.events.maximized.set()
+    show()
+
+    # restore() would un-maximize a maximized window, so it's only called
+    # while the window is actually minimized.
+    assert window.restore_calls == 0
 
 
 # --- Single instance --------------------------------------------------
@@ -3454,140 +3122,6 @@ def test_window_api_set_autostart_delegates_to_helper(monkeypatch):
 # --- close behavior (Settings tab) ------------------------------------------
 
 
-def test_read_close_behavior_defaults_to_tray_when_no_prefs_file(tmp_path):
-    assert windows_launcher._read_close_behavior(tmp_path / "config.py") == "tray"
-
-
-def test_write_then_read_close_behavior_round_trips(tmp_path):
-    config_path = tmp_path / "config.py"
-
-    success, message = windows_launcher._write_close_behavior(config_path, "quit")
-
-    assert success is True
-    assert message == "Saved."
-    assert windows_launcher._read_close_behavior(config_path) == "quit"
-
-
-def test_write_close_behavior_rejects_unknown_value(tmp_path):
-    success, message = windows_launcher._write_close_behavior(
-        tmp_path / "config.py", "bogus"
-    )
-
-    assert success is False
-    assert "Invalid" in message
-
-
-def test_read_close_behavior_ignores_unrecognized_stored_value(tmp_path):
-    config_path = tmp_path / "config.py"
-    windows_launcher._shell_prefs_path(config_path).write_text(
-        '{"close_behavior": "bogus"}', encoding="utf-8"
-    )
-
-    assert windows_launcher._read_close_behavior(config_path) == "tray"
-
-
-def test_read_close_behavior_tolerates_corrupt_prefs_file(tmp_path):
-    config_path = tmp_path / "config.py"
-    windows_launcher._shell_prefs_path(config_path).write_text(
-        "not json", encoding="utf-8"
-    )
-
-    assert windows_launcher._read_close_behavior(config_path) == "tray"
-
-
-def test_write_close_behavior_preserves_other_keys_in_prefs_file(tmp_path):
-    config_path = tmp_path / "config.py"
-    windows_launcher._shell_prefs_path(config_path).write_text(
-        '{"other_setting": 42}', encoding="utf-8"
-    )
-
-    windows_launcher._write_close_behavior(config_path, "quit")
-
-    saved = json.loads(
-        windows_launcher._shell_prefs_path(config_path).read_text(encoding="utf-8")
-    )
-    assert saved == {"other_setting": 42, "close_behavior": "quit"}
-
-
-def test_make_close_dispatcher_routes_to_hide_handler_by_default():
-    calls = []
-    dispatcher = windows_launcher._make_close_dispatcher(
-        lambda: "tray",
-        lambda: calls.append("hide") or False,
-        lambda: calls.append("quit") or True,
-    )
-
-    result = dispatcher()
-
-    assert calls == ["hide"]
-    assert result is False
-
-
-def test_make_close_dispatcher_routes_to_quit_handler_when_preference_is_quit():
-    calls = []
-    dispatcher = windows_launcher._make_close_dispatcher(
-        lambda: "quit",
-        lambda: calls.append("hide") or False,
-        lambda: calls.append("quit") or True,
-    )
-
-    result = dispatcher()
-
-    assert calls == ["quit"]
-    assert result is True
-
-
-def test_window_api_get_close_behavior_info_reports_availability_and_value(tmp_path):
-    config_path = tmp_path / "config.py"
-    windows_launcher._write_close_behavior(config_path, "quit")
-    api = windows_launcher.WindowApi(
-        windows_launcher.ConsoleBuffer(),
-        None,
-        None,
-        config_path,
-        False,
-        lambda: None,
-        None,
-    )
-    api._tray_available = True
-
-    assert api.get_close_behavior_info() == {"available": True, "value": "quit"}
-
-
-def test_window_api_get_close_behavior_info_defaults_unavailable(tmp_path):
-    api = windows_launcher.WindowApi(
-        windows_launcher.ConsoleBuffer(),
-        None,
-        None,
-        tmp_path / "config.py",
-        False,
-        lambda: None,
-        None,
-    )
-
-    info = api.get_close_behavior_info()
-
-    assert info == {"available": False, "value": "tray"}
-
-
-def test_window_api_set_close_behavior_persists_value(tmp_path):
-    config_path = tmp_path / "config.py"
-    api = windows_launcher.WindowApi(
-        windows_launcher.ConsoleBuffer(),
-        None,
-        None,
-        config_path,
-        False,
-        lambda: None,
-        None,
-    )
-
-    result = api.set_close_behavior("quit")
-
-    assert result == {"success": True, "message": "Saved."}
-    assert windows_launcher._read_close_behavior(config_path) == "quit"
-
-
 def test_window_api_get_about_info_reports_version_and_commit(tmp_path, monkeypatch):
     monkeypatch.setattr(windows_launcher, "_build_commit_hash", lambda: "abc1234")
     api = windows_launcher.WindowApi(
@@ -3604,97 +3138,6 @@ def test_window_api_get_about_info_reports_version_and_commit(tmp_path, monkeypa
 
     assert info["version"] == windows_launcher.__version__
     assert info["commit"] == "abc1234"
-
-
-def test_launch_shell_close_button_quits_immediately_when_preference_is_quit(
-    tmp_path, monkeypatch
-):
-    fake_webview = _FakeWebview()
-    _patch_fake_webview(monkeypatch, fake_webview)
-    monkeypatch.setattr(
-        windows_launcher, "_maybe_prompt_to_enable_analytics", lambda *a: None
-    )
-    monkeypatch.setattr(
-        windows_launcher, "_build_tray_icon", lambda on_show, on_quit: _FakeTrayIcon()
-    )
-    config_path = tmp_path / "config.py"
-    windows_launcher._write_close_behavior(config_path, "quit")
-
-    windows_launcher.launch_shell(
-        None,
-        windows_launcher.ConsoleBuffer(),
-        None,
-        _FakeMinerThread(alive=False),
-        config_path,
-        tmp_path / ".shell_analytics_prompt_shown",
-        False,
-        lambda: None,
-        None,
-    )
-
-    window = fake_webview.window
-    # No miner running, so the confirm-and-quit handler allows the close
-    # outright rather than hiding to the tray - proving the preference (not
-    # just tray availability) decides the behavior.
-    assert window.events.closing.handler() is True
-
-
-def test_launch_shell_exposes_tray_availability_to_window_api(tmp_path, monkeypatch):
-    fake_webview = _FakeWebview()
-    _patch_fake_webview(monkeypatch, fake_webview)
-    monkeypatch.setattr(
-        windows_launcher, "_maybe_prompt_to_enable_analytics", lambda *a: None
-    )
-    monkeypatch.setattr(
-        windows_launcher, "_build_tray_icon", lambda on_show, on_quit: _FakeTrayIcon()
-    )
-
-    windows_launcher.launch_shell(
-        None,
-        windows_launcher.ConsoleBuffer(),
-        None,
-        _FakeMinerThread(alive=False),
-        tmp_path / "config.py",
-        tmp_path / ".shell_analytics_prompt_shown",
-        False,
-        lambda: None,
-        None,
-    )
-
-    assert fake_webview.create_window_kwargs["js_api"]._tray_available is True
-
-
-def test_launch_shell_tray_unavailable_leaves_window_api_reporting_it(
-    tmp_path, monkeypatch
-):
-    fake_webview = _FakeWebview()
-    _patch_fake_webview(monkeypatch, fake_webview)
-    monkeypatch.setattr(
-        windows_launcher, "_maybe_prompt_to_enable_analytics", lambda *a: None
-    )
-    monkeypatch.setattr(
-        windows_launcher,
-        "_build_tray_icon",
-        lambda on_show, on_quit: (_ for _ in ()).throw(RuntimeError("no tray")),
-    )
-
-    windows_launcher.launch_shell(
-        None,
-        windows_launcher.ConsoleBuffer(),
-        None,
-        _FakeMinerThread(alive=False),
-        tmp_path / "config.py",
-        tmp_path / ".shell_analytics_prompt_shown",
-        False,
-        lambda: None,
-        None,
-    )
-
-    assert fake_webview.create_window_kwargs["js_api"]._tray_available is False
-    assert fake_webview.create_window_kwargs["js_api"].get_close_behavior_info() == {
-        "available": False,
-        "value": "tray",
-    }
 
 
 # --- --start-minimized -----------------------------------------------------
@@ -3795,7 +3238,7 @@ def test_main_ignores_start_minimized_while_username_setup_is_pending(
     assert captured["start_minimized"] is False
 
 
-def test_launch_shell_passes_hidden_kwarg_to_create_window(tmp_path, monkeypatch):
+def test_launch_shell_passes_minimized_kwarg_to_create_window(tmp_path, monkeypatch):
     fake_webview = _FakeWebview()
     _patch_fake_webview(monkeypatch, fake_webview)
     monkeypatch.setattr(
@@ -3815,4 +3258,7 @@ def test_launch_shell_passes_hidden_kwarg_to_create_window(tmp_path, monkeypatch
         start_minimized=True,
     )
 
-    assert fake_webview.create_window_kwargs["hidden"] is True
+    # Minimized to the taskbar, never hidden: with no tray icon, a hidden
+    # window would have no way to be brought back except relaunching.
+    assert fake_webview.create_window_kwargs["minimized"] is True
+    assert fake_webview.create_window_kwargs.get("hidden", False) is False

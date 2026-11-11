@@ -104,8 +104,7 @@
             font-size: 13px;
         }
 
-        #shell-autostart-label,
-        .settings-radio-label {
+        #shell-autostart-label {
             display: flex;
             align-items: center;
             gap: 6px;
@@ -113,10 +112,6 @@
             font-size: 13px;
             cursor: pointer;
             margin: 6px 0;
-        }
-
-        .settings-radio-label span {
-            color: #9aa0c0;
         }
 
         .settings-button {
@@ -456,23 +451,6 @@
         </div>
 
         <div class="settings-section">
-            <h3>Closing the window</h3>
-            <div id="shell-close-behavior-group" hidden>
-                <label class="settings-radio-label">
-                    <input type="radio" name="shell-close-behavior" id="shell-close-behavior-tray" value="tray">
-                    Minimize to the tray <span>&ndash; mining keeps running in the background</span>
-                </label>
-                <label class="settings-radio-label">
-                    <input type="radio" name="shell-close-behavior" id="shell-close-behavior-quit" value="quit">
-                    Quit the app <span>&ndash; stops mining, asks to confirm first</span>
-                </label>
-            </div>
-            <p id="shell-close-behavior-unavailable-note" hidden>
-                The system tray isn't available on this machine, so closing this window always quits the app.
-            </p>
-        </div>
-
-        <div class="settings-section">
             <h3>Files</h3>
             <button id="settings-open-config-folder" class="settings-button" type="button">Open config folder</button>
             <button id="settings-open-logs-folder" class="settings-button" type="button">Open logs folder</button>
@@ -582,41 +560,6 @@
             });
         });
 
-        // Hidden by default - only shown once get_close_behavior_info()
-        // confirms a tray icon actually came up (see WindowApi._tray_available);
-        // without a tray there's nothing to minimize to, so the window's
-        // close button always just quits.
-        var closeBehaviorGroup = document.getElementById('shell-close-behavior-group');
-        var closeBehaviorRadios = document.getElementsByName('shell-close-behavior');
-        Array.prototype.forEach.call(closeBehaviorRadios, function (radio) {
-            radio.addEventListener('change', function () {
-                if (!radio.checked) return;
-                var wanted = radio.value;
-                Array.prototype.forEach.call(closeBehaviorRadios, function (r) { r.disabled = true; });
-                window.pywebview.api.set_close_behavior(wanted).then(function (result) {
-                    if (!result || !result.success) loadCloseBehavior();
-                }).catch(function () {
-                    loadCloseBehavior();
-                }).finally(function () {
-                    Array.prototype.forEach.call(closeBehaviorRadios, function (r) { r.disabled = false; });
-                });
-            });
-        });
-
-        function loadCloseBehavior() {
-            window.pywebview.api.get_close_behavior_info().then(function (info) {
-                if (!info) return;
-                closeBehaviorGroup.hidden = !info.available;
-                document.getElementById('shell-close-behavior-unavailable-note').hidden = info.available;
-                if (info.available) {
-                    var selected = document.getElementById(
-                        info.value === 'quit' ? 'shell-close-behavior-quit' : 'shell-close-behavior-tray'
-                    );
-                    selected.checked = true;
-                }
-            });
-        }
-
         var settingsLoaded = false;
 
         function loadSettings() {
@@ -628,7 +571,6 @@
                     autostartCheckbox.checked = !!info.enabled;
                 }
             });
-            loadCloseBehavior();
             window.pywebview.api.get_about_info().then(function (info) {
                 if (!info) return;
                 var text = 'Twitch Channel Points Miner - version ' + info.version;

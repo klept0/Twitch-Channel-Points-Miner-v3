@@ -48,8 +48,8 @@ Source: "config.example.py"; DestDir: "{localappdata}\TwitchChannelPointsMiner\c
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
-; Launches straight to the tray (--start-minimized) rather than popping the
-; window on every sign-in - see windows_launcher.py's _START_MINIMIZED_FLAG.
+; Launches minimized to the taskbar (--start-minimized) rather than popping
+; the window on every sign-in - see windows_launcher.py's _START_MINIMIZED_FLAG.
 Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--start-minimized"; WorkingDir: "{app}"; Tasks: startuponlogin
 
 [Run]

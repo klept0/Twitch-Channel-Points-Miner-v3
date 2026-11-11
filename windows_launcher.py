@@ -3,7 +3,6 @@
 """Windows executable entry point for Twitch Channel Points Miner."""
 
 import ctypes  # cross-platform stdlib module; only .windll is Windows-only (guarded below)
-import json
 import logging
 import os
 import secrets
@@ -71,13 +70,10 @@ DEFAULT_ANALYTICS_PORT = 54455
 # users can still change it in ANALYTICS_CONFIG at any time, and an existing
 # config that already has a 'port' value keeps it untouched.
 _PLACEHOLDER_USERNAME = "your-twitch-username"
-_TRAY_ICON_FILE = "twitch-miner.ico"
+_WINDOW_ICON_FILE = "twitch-miner.ico"
 _AUTOSTART_VALUE_NAME = "TwitchChannelPointsMiner"
 _AUTOSTART_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _START_MINIMIZED_FLAG = "--start-minimized"
-_SHELL_PREFS_FILENAME = "shell_prefs.json"
-_CLOSE_BEHAVIOR_TRAY = "tray"
-_CLOSE_BEHAVIOR_QUIT = "quit"
 # Session-local (not "Global\\") - matches the rest of this launcher's
 # per-user assumptions (e.g. the autostart registry key lives under HKCU),
 # and avoids needing any elevated privilege to create.
@@ -524,7 +520,7 @@ def install_console_capture(buffer):
 
 def _configure_launcher_logging():
     """Make this module's own `logger.info(...)` calls (the shell-lifecycle
-    diagnostics in launch_shell/_make_hide_to_tray_handler) actually show up
+    diagnostics in launch_shell) actually show up
     in the Console tab from the moment the window exists.
 
     Without this, `logger` has no handler and sits at the logging module's
@@ -729,11 +725,11 @@ def _start_single_instance_listener(show):
     A closed connection carries no payload - just connecting is the whole
     signal - so there's nothing to parse and nothing a local unprivileged
     process could send to make this do anything other than show the
-    window it could already show itself via the tray.
+    window.
 
     Takes a `show` callable rather than the window directly so the caller
-    can route it through the same quit-in-progress guard as the tray's own
-    Show item - see `_make_close_confirmation_handler`'s `quitting` event.
+    can route it through a quit-in-progress guard - see
+    `_make_close_confirmation_handler`'s `quitting` event.
     """
 
     def _serve():
@@ -755,111 +751,6 @@ def _start_single_instance_listener(show):
     threading.Thread(
         target=_serve, name="Single instance listener", daemon=True
     ).start()
-
-
-def _build_tray_icon(on_show, on_quit):
-    """Build a (not-yet-running) system tray icon with Show/Quit actions.
-
-    Imports pystray/Pillow lazily, the same way launch_shell() imports
-    webview lazily - so this module stays importable on platforms/test
-    environments where the Windows-only tray dependency isn't installed.
-    Any failure here (missing dependency, unreadable icon, no tray support
-    on this desktop) is the caller's signal to fall back to the older
-    confirm-on-close behavior rather than leave the app unclosable.
-
-    "Show" is marked as pystray's `default` menu item - on Windows, that's
-    the item invoked when the tray icon itself is double-clicked, not just
-    a marker for how it's drawn in the menu. Without it, double-clicking
-    the icon does nothing at all: Windows only ever activates the menu's
-    default item, and pystray otherwise leaves no item marked as one.
-    """
-    import pystray
-    from PIL import Image
-
-    image = Image.open(bundled_file(os.path.join("assets", _TRAY_ICON_FILE)))
-    menu = pystray.Menu(
-        pystray.MenuItem("Show", lambda icon, item: on_show(), default=True),
-        pystray.MenuItem("Quit", lambda icon, item: on_quit()),
-    )
-    return pystray.Icon(
-        "TwitchChannelPointsMiner", image, "Twitch Channel Points Miner", menu
-    )
-
-
-def _make_hide_to_tray_handler(window, tray_icon):
-    """Build a `window.events.closing` handler that hides the window to the
-    tray instead of closing it - mining is unaffected, so unlike the older
-    confirm-on-close handler this never needs to ask anything. Quitting for
-    real now only ever happens via the tray icon's own Quit action (see
-    launch_shell), which is where that confirmation moved to.
-
-    Fires a tray balloon/toast notification each time, since hiding the
-    window gives no other feedback that the app is still running rather
-    than having just closed - easy to mistake for a quit, especially the
-    first time. Best-effort: pystray's HAS_NOTIFICATION is False on some
-    platforms/backends, and a notification failing is never worth blocking
-    the hide itself over.
-    """
-
-    def on_closing():
-        logger.info(
-            "Close button pressed: hiding the window to the tray instead of quitting."
-        )
-        window.hide()
-        try:
-            tray_icon.notify(
-                "Still running and mining in the background. "
-                "Use the tray icon's Quit to stop it.",
-                "Twitch Channel Points Miner",
-            )
-        except Exception:
-            pass
-        return False
-
-    return on_closing
-
-
-def _shell_prefs_path(config_path):
-    """Where the Settings tab's own small preferences (currently just the
-    close behavior) live - beside config.py, so it moves with the rest of a
-    user's data the same way config/cookies/analytics already do, without
-    needing its own directory-resolution logic."""
-    return config_path.parent / _SHELL_PREFS_FILENAME
-
-
-def _read_shell_prefs(config_path):
-    try:
-        return json.loads(_shell_prefs_path(config_path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def _read_close_behavior(config_path):
-    """What the window's own close button (X) should do - "tray" (hide,
-    mining keeps running - the default) or "quit" (stop mining, same
-    confirm-then-close flow as the tray icon's own Quit item). Any missing
-    or unrecognized value falls back to "tray", the long-standing default
-    behavior."""
-    value = _read_shell_prefs(config_path).get("close_behavior")
-    return (
-        value
-        if value in (_CLOSE_BEHAVIOR_TRAY, _CLOSE_BEHAVIOR_QUIT)
-        else _CLOSE_BEHAVIOR_TRAY
-    )
-
-
-def _write_close_behavior(config_path, value):
-    """Persist the close-behavior choice. Returns (success, message), the
-    same contract as _enable_dashboard_from_shell/set_autostart_enabled."""
-    if value not in (_CLOSE_BEHAVIOR_TRAY, _CLOSE_BEHAVIOR_QUIT):
-        return False, "Invalid value."
-    prefs = _read_shell_prefs(config_path)
-    prefs["close_behavior"] = value
-    try:
-        _shell_prefs_path(config_path).write_text(json.dumps(prefs), encoding="utf-8")
-    except OSError as error:
-        return False, f"Could not save this setting: {error}"
-    return True, "Saved."
 
 
 def _autostart_command():
@@ -891,7 +782,7 @@ def is_autostart_enabled():
 
 def set_autostart_enabled(enabled):
     """Add or remove the per-user Run key entry that launches this exe
-    (minimized, straight to the tray - see _START_MINIMIZED_FLAG) at
+    (minimized to the taskbar - see _START_MINIMIZED_FLAG) at
     Windows login.
 
     Returns (success, message) - meant to be shown to the user as-is, the
@@ -942,13 +833,6 @@ class WindowApi:
         self._needs_username = needs_username
         self._start_mining = start_mining
         self._logs_dir = logs_dir
-        # Set by launch_shell once it knows whether the tray icon actually
-        # came up (pystray/Pillow missing, bad icon, no desktop tray, ...) -
-        # unknown/False at construction time since the tray is only built
-        # after this object already exists. The Settings tab uses this to
-        # hide the "minimize to tray" choice when there'd be no tray to
-        # minimize to.
-        self._tray_available = False
 
     def get_console_tail(self, since_seq=0):
         lines, next_seq = self._console_buffer.tail(int(since_seq or 0))
@@ -1047,16 +931,6 @@ class WindowApi:
         success, message = set_autostart_enabled(bool(enabled))
         return {"success": success, "message": message}
 
-    def get_close_behavior_info(self):
-        return {
-            "available": self._tray_available,
-            "value": _read_close_behavior(self._config_path),
-        }
-
-    def set_close_behavior(self, value):
-        success, message = _write_close_behavior(self._config_path, value)
-        return {"success": success, "message": message}
-
     def get_about_info(self):
         return {
             "version": __version__,
@@ -1121,21 +995,9 @@ class _MinerThreadHandle:
         self.miner = miner
 
 
-def _make_close_confirmation_handler(
-    window, miner_thread, quitting=None, tray_icon=None
-):
+def _make_close_confirmation_handler(window, miner_thread, quitting=None):
     """Build a `window.events.closing` handler that blocks the close unless
     the user confirms, whenever the miner is still running.
-
-    `tray_icon`, when given, fires a "shutting down" balloon/toast the
-    moment the user confirms - `_stop_miner_gracefully` below runs
-    synchronously on this same (GUI) thread and can legitimately take up to
-    a few minutes (IRC leave, websocket teardown, several 30-60s watcher
-    joins), during which the window itself is unresponsive and looks hung.
-    The notification is rendered by the shell (explorer.exe), not this
-    process, so it stays visible through that blocked stretch. Best-effort,
-    matching this file's other tray_icon.notify use in
-    _make_hide_to_tray_handler: never worth failing the quit over.
 
     Before this shell existed, stopping the miner required an explicit
     Ctrl+C; a bare click on the window's close button must not silently end
@@ -1148,7 +1010,7 @@ def _make_close_confirmation_handler(
     Guarded by a non-blocking lock against reentrant calls: pywebview's
     WinForms confirmation dialog is a bare `MessageBox.Show()` with no
     owner window, so it does not disable the underlying form - clicking
-    the window's close button again (or tray Quit again) while it's up
+    the window's close button again while it's up
     re-fires WinForms' FormClosing before this handler has returned.
     Without the guard, that reentrant call would show a second dialog and
     - if confirmed - actually close/dispose the form from inside the
@@ -1159,17 +1021,17 @@ def _make_close_confirmation_handler(
     `quitting` (a threading.Event) is set for the duration of the dialog
     and left set once the user confirms - see launch_shell's `_guarded_show`.
     An unowned MessageBox doesn't just let a second *close* reach the form
-    (the reentrancy above); it also leaves the tray's "Show" item, and the
-    single-instance listener's remote-show signal, free to fire from their
-    own threads while this dialog is up. `window.show()` marshals onto the
+    (the reentrancy above); it also leaves the single-instance listener's
+    remote-show signal free to fire from its own thread while this dialog
+    is up. `window.show()` marshals onto the
     GUI thread via Control.Invoke, which a nested modal message loop like
     MessageBox.Show still pumps - so it can run interleaved with this
     handler tearing the window down, producing the same
     already-removed-from-pywebview's-instance-table crash as the reentrant
     case above, just reached via Show instead of a second Close. Cleared
     again if the user cancels, so Show keeps working normally afterward.
-    Defaults to a fresh, private Event when the caller has no tray (and
-    thus no Show button to race against).
+    Defaults to a fresh, private Event when the caller has no show path to
+    race against.
     """
     in_progress = threading.Lock()
     if quitting is None:
@@ -1193,37 +1055,12 @@ def _make_close_confirmation_handler(
                 # silently stopping an unattended miner.
                 return False
             if confirmed:
-                if tray_icon is not None:
-                    try:
-                        tray_icon.notify(
-                            "Shutting down - leaving chat, closing connections, and "
-                            "saving data. This can take a moment.",
-                            "Twitch Channel Points Miner",
-                        )
-                    except Exception:
-                        pass
                 _stop_miner_gracefully(miner_thread)
             return confirmed
         finally:
             if not confirmed:
                 quitting.clear()
             in_progress.release()
-
-    return on_closing
-
-
-def _make_close_dispatcher(get_close_behavior, hide_handler, quit_handler):
-    """Build the normal (non-tray-Quit) `window.events.closing` handler,
-    routing to hide-to-tray or confirm-and-quit based on the user's saved
-    close-behavior preference (see _read_close_behavior/_write_close_behavior,
-    exposed through the Settings tab). Re-read on every close rather than
-    captured once, so a preference change takes effect immediately without
-    restarting the app."""
-
-    def on_closing():
-        if get_close_behavior() == _CLOSE_BEHAVIOR_QUIT:
-            return quit_handler()
-        return hide_handler()
 
     return on_closing
 
@@ -1334,10 +1171,10 @@ def launch_shell(
         # instead of a separate window, so that default would defeat its
         # purpose.
         text_select=True,
-        # Start-on-login launches straight to the tray rather than popping a
-        # window on every boot - but never while first-run setup still needs
-        # to collect a username (see main()'s start_minimized gating).
-        hidden=start_minimized,
+        # Start-on-login opens minimized to the taskbar rather than popping
+        # a window on every boot - but never while first-run setup still
+        # needs to collect a username (see main()'s start_minimized gating).
+        minimized=start_minimized,
     )
 
     # Diagnostic-only: some users report the window occasionally not
@@ -1375,11 +1212,31 @@ def launch_shell(
     window.events.restored += _log_window_event("restored")
     logger.info("Registered minimize/restore diagnostics for the shell window.")
 
+    # pywebview's window.show() is just Form.Show() + Activate(), which does
+    # not restore a minimized form - so a second launch (see _guarded_show)
+    # would only flash the taskbar button of a window started with
+    # --start-minimized or minimized by the user. Track the state from the
+    # window's own events so _guarded_show can restore it, without calling
+    # restore() on a maximized window (which would un-maximize it).
+    window_minimized = threading.Event()
+    if start_minimized:
+        window_minimized.set()
+
+    def _on_minimized(*args, **kwargs):
+        window_minimized.set()
+
+    def _on_restored_or_maximized(*args, **kwargs):
+        window_minimized.clear()
+
+    window.events.minimized += _on_minimized
+    window.events.restored += _on_restored_or_maximized
+    window.events.maximized += _on_restored_or_maximized
+
     # Set for as long as a close/quit confirmation dialog is up (and left set
     # once the user confirms) - see _make_close_confirmation_handler's
     # docstring for the race this closes between that dialog and a
-    # concurrent Show request from the tray icon's own thread or the
-    # single-instance listener's socket thread.
+    # concurrent Show request from the single-instance listener's socket
+    # thread.
     quitting = threading.Event()
 
     def _guarded_show():
@@ -1387,107 +1244,27 @@ def launch_shell(
             return
         try:
             window.show()
+            if window_minimized.is_set():
+                window.restore()
         except Exception:
-            # Best-effort, matching _message_box/tray_icon.notify elsewhere
-            # in this file: the is_set() check above and the underlying
-            # pywebview call it guards aren't atomic with on_closing setting
+            # Best-effort, matching _message_box elsewhere in this file: the
+            # is_set() check above and the underlying pywebview call it
+            # guards aren't atomic with on_closing setting
             # `quitting` - a Show can still be in flight (already past the
             # check, already marshaled onto the GUI thread via
             # Control.Invoke) at the exact moment the window gets torn down.
             # Swallowing here keeps that vanishingly rare, already-late Show
-            # from raising back into a caller that must not die over it: the
-            # tray icon's own callback thread, or _start_single_instance_listener's
-            # daemon thread, which would otherwise silently and permanently
-            # stop responding to second-launch pings for the rest of this run.
+            # from raising back into a caller that must not die over it:
+            # _start_single_instance_listener's daemon thread, which would
+            # otherwise silently and permanently stop responding to
+            # second-launch pings for the rest of this run.
             pass
 
     _start_single_instance_listener(_guarded_show)
 
-    tray_icon = None
-    normal_handler = None
-    quit_handler = None
-    confirm_from_tray_lock = threading.Lock()
-
-    def _confirm_and_quit_from_tray():
-        """A `window.events.closing` handler, temporarily swapped in by
-        `_quit_from_tray` below in place of the normal handler.
-
-        Critically, this makes it run on pywebview's actual GUI thread:
-        `events.closing` fires from inside WinForms' own FormClosing event,
-        itself reached only through `destroy()`, which pywebview properly
-        marshals onto that thread (`Control.Invoke`). pystray's Quit menu
-        item, by contrast, calls back on pystray's *own* icon thread - and
-        `create_confirmation_dialog` on Windows is a bare, unmarshaled
-        `MessageBox.Show()` with no thread-affinity handling of its own.
-        Calling it directly from there (as this used to) could leave the
-        whole app stuck after the dialog was answered, with no way to
-        actually quit short of killing the process. Routing through this
-        event instead keeps the entire confirm-then-stop sequence on the
-        thread WinForms actually expects it on.
-
-        Stays registered on `window.events.closing` for the whole call,
-        including while `quit_handler()` is blocked showing its
-        confirmation dialog - removing it first (as this used to) leaves
-        no handler registered during that window, so a reentrant close
-        (a real, unowned WinForms MessageBox doesn't stop clicks from
-        reaching the underlying form - e.g. its own [X] clicked again
-        while this dialog is up) would sail through uncancelled instead of
-        being cancelled here. Guarded by its own lock, acquired before
-        calling `quit_handler()` and released after, so that reentrant
-        call - reached via a nested `events.closing.set()` while this one
-        is still on the stack - is cancelled outright without touching
-        event registration at all; only the outer call ever adds/removes
-        handlers.
-        """
-        if not confirm_from_tray_lock.acquire(blocking=False):
-            return False
-        try:
-            confirmed = quit_handler()
-        finally:
-            confirm_from_tray_lock.release()
-        if not confirmed:
-            # Cancelled - restore the normal close behavior for the next
-            # close/hide, whether that's this same tray Quit tried again or
-            # the window's own close button.
-            window.events.closing -= _confirm_and_quit_from_tray
-            window.events.closing += normal_handler
-            return False
-        window.events.closing -= _confirm_and_quit_from_tray
-        if tray_icon is not None:
-            tray_icon.stop()
-        return True
-
-    def _quit_from_tray():
-        window.events.closing -= normal_handler
-        window.events.closing += _confirm_and_quit_from_tray
-        window.destroy()
-
-    try:
-        tray_icon = _build_tray_icon(_guarded_show, _quit_from_tray)
-    except Exception:
-        # No tray support available (dependency missing, no desktop tray,
-        # bad icon, ...) - fall back to the older confirm-on-close behavior
-        # rather than leave the app with no way to quit at all.
-        tray_icon = None
-        logger.exception(
-            "System tray icon unavailable; falling back to confirm-on-close."
-        )
-
-    quit_handler = _make_close_confirmation_handler(
-        window, miner_thread, quitting, tray_icon
+    window.events.closing += _make_close_confirmation_handler(
+        window, miner_thread, quitting
     )
-
-    api._tray_available = tray_icon is not None
-
-    if tray_icon is not None:
-        threading.Thread(target=tray_icon.run, name="Tray icon", daemon=True).start()
-        hide_handler = _make_hide_to_tray_handler(window, tray_icon)
-        normal_handler = _make_close_dispatcher(
-            lambda: _read_close_behavior(config_path), hide_handler, quit_handler
-        )
-    else:
-        normal_handler = quit_handler
-    window.events.closing += normal_handler
 
     def _on_started():
         # Dialogs (unlike event handlers) require the GUI loop that
@@ -1518,7 +1295,7 @@ def launch_shell(
     # (taskbar/Alt-Tab), separate from the exe *file's* icon in Explorer,
     # which PyInstaller's --icon flag in build_windows.bat already covers.
     webview.start(
-        _on_started, icon=str(bundled_file(os.path.join("assets", _TRAY_ICON_FILE)))
+        _on_started, icon=str(bundled_file(os.path.join("assets", _WINDOW_ICON_FILE)))
     )
 
 
@@ -1557,7 +1334,7 @@ def main():
         _message_box(
             "Twitch Channel Points Miner is already running.\n\n"
             "Bringing the existing window to the foreground - check your "
-            "taskbar or system tray if it doesn't appear.",
+            "taskbar if it doesn't appear.",
             "Twitch Channel Points Miner",
             0x40,  # MB_ICONINFORMATION
         )
