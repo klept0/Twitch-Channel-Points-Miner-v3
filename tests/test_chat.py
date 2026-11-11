@@ -262,3 +262,11 @@ def test_thread_chat_run_passes_settings_to_client(monkeypatch):
     thread.run()
 
     assert created["kwargs"] == {"settings": sentinel}
+
+
+def test_irc_tls_context_requires_tls12_and_verifies_hostname():
+    context = Chat._irc_tls_context()
+
+    assert context.minimum_version >= ssl.TLSVersion.TLSv1_2
+    assert context.check_hostname is True
+    assert context.verify_mode == ssl.CERT_REQUIRED
