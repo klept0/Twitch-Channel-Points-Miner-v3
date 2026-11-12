@@ -11,6 +11,7 @@ from TwitchChannelPointsMiner.classes.gql.Errors import (
     is_persisted_query_not_found_message,
 )
 from TwitchChannelPointsMiner.classes.gql.Integration import GQL
+from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.constants import GQLOperations
 from TwitchChannelPointsMiner.utils import AttemptStrategy
 
@@ -191,3 +192,93 @@ def test_batch_with_raw_queries_resends_whole_batch_raw():
         GQLOperations.raw_queries["ViewerDropsDashboard"],
         GQLOperations.raw_queries["ModViewChannelQuery"],
     ]
+
+
+def test_inventory_fallback_parses_a_nonempty_inventory():
+    calls = []
+    drop = {
+        "id": "drop-1",
+        "name": "Reward",
+        "startAt": "2020-01-01T00:00:00Z",
+        "endAt": "2099-01-01T00:00:00Z",
+        "benefitEdges": [{"benefit": {"name": "Reward"}}],
+        "requiredMinutesWatched": 10,
+        "requiredSubs": 0,
+        "self": {
+            "hasPreconditionsMet": True,
+            "currentMinutesWatched": 10,
+            "currentSubs": 0,
+            "dropInstanceID": "instance-1",
+            "isClaimed": False,
+        },
+    }
+
+    def post(url, json, headers):
+        calls.append(copy.deepcopy(json))
+        if "query" not in json:
+            return FakeResponse(persisted_not_found())
+        selected_drop = copy.deepcopy(drop)
+        # GraphQL only returns fields selected by the raw fallback. Exercise
+        # the typed parser against that response rather than a raw dict call.
+        if "requiredSubs" not in json["query"]:
+            selected_drop.pop("requiredSubs")
+        if "currentSubs" not in json["query"]:
+            selected_drop["self"].pop("currentSubs")
+        return FakeResponse(
+            {
+                "data": {
+                    "currentUser": {
+                        "inventory": {
+                            "dropCampaignsInProgress": [
+                                {"id": "campaign-1", "timeBasedDrops": [selected_drop]}
+                            ],
+                        }
+                    }
+                }
+            }
+        )
+
+    gql = GQL(
+        client_session(),
+        post_request=post,
+        attempt_strategy=AttemptStrategy(attempts=1, attempt_interval_seconds=0),
+    )
+
+    response = gql.get_inventory()
+    assert response.inventory["dropCampaignsInProgress"][0]["timeBasedDrops"][0] == drop
+    assert gql.get_inventory().inventory == response.inventory
+    assert len(calls) == 3
+    assert "extensions" in calls[0]
+    assert all("extensions" not in call for call in calls[1:])
+
+
+def test_claim_fallback_preserves_unlinked_account_guard(monkeypatch):
+    calls = []
+
+    def post(url, json, headers):
+        calls.append(copy.deepcopy(json))
+        if "query" not in json:
+            return FakeResponse(persisted_not_found())
+        claim = {"status": "ELIGIBLE_FOR_ALL"}
+        if "isUserAccountConnected" in json["query"]:
+            claim["isUserAccountConnected"] = False
+        return FakeResponse({"data": {"claimDropRewards": claim}})
+
+    twitch = object.__new__(Twitch)
+    twitch.gql = GQL(client_session(), post_request=post)
+    twitch.log_drop_checks = False
+    monkeypatch.setattr(
+        Twitch, "_Twitch__drop_variant_entries_from_drop", lambda *args: []
+    )
+    drop = SimpleNamespace(id="drop-1", name="Reward", drop_instance_id="instance-1")
+    link = {
+        "campaign_id": "campaign-1",
+        "connected": False,
+        "url": "https://example.test/link",
+    }
+
+    assert twitch.claim_drop(drop, campaign_link=link) is False
+    assert twitch.claim_drop(drop, campaign_link=link) is False
+    assert twitch.unlinked_drop_report()[0]["url"] == link["url"]
+    assert "instance-1" not in twitch.accepted_drop_claims
+    assert len(calls) == 2

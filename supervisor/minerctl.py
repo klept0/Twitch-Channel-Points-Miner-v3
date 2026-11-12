@@ -98,7 +98,7 @@ class Systemd:
                 Wants=network-online.target
 
                 [Service]
-                ExecStart={q(python)} {q(SUPERVISOR)} --miner-dir {q(miner_dir)}
+                ExecStart={q(python)} {q(SUPERVISOR)} --miner-dir {q(miner_dir)} --python {q(python)}
                 WorkingDirectory={miner_dir}
                 Restart=always
                 RestartSec=300
@@ -261,7 +261,14 @@ class Launchd:
         hh, mm = summary_time.split(":")
         jobs = {
             self.sup: (
-                [python, str(SUPERVISOR), "--miner-dir", str(miner_dir)],
+                [
+                    python,
+                    str(SUPERVISOR),
+                    "--miner-dir",
+                    str(miner_dir),
+                    "--python",
+                    python,
+                ],
                 "    <key>RunAtLoad</key><true/>\n    <key>KeepAlive</key><true/>\n"
                 "    <key>ThrottleInterval</key><integer>300</integer>\n"
                 "    <key>ExitTimeOut</key><integer>180</integer>",
@@ -728,6 +735,26 @@ def cmd_install(p: Paths, args) -> int:
             os.chmod(ALERT_CONFIG, 0o600)
             print(
                 f"Saved {ALERT_CONFIG} (mode 600). Test it with: minerctl.py test-alert"
+            )
+
+    cfg = load_alert_config() or {}
+    if cfg.get("appriseUrls") or cfg.get("appriseUrgentUrls"):
+        print("Installing optional requirements for Apprise alerts ...")
+        r = subprocess.run(
+            [
+                python,
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "-q",
+                "-r",
+                str(p.miner_dir / "requirements-optional.txt"),
+            ]
+        )
+        if r.returncode != 0:
+            sys.exit(
+                "Apprise optional requirements install failed - fix the error above and run install again."
             )
 
     p.log_dir.mkdir(parents=True, exist_ok=True)
