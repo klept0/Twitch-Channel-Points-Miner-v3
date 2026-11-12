@@ -1,5 +1,25 @@
 # Changelog
 
+## [3.20.0-post.6](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.5...3.20.0-post.6) (2026-11-12)
+
+
+### Features
+
+* **auth:** add an opt-in Android app login for full Drops data ([#255](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/255)) ([acf3971](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/acf3971c17e274efe54d5226756883f967b449d4))
+* **chat:** notify on gifted subs and optionally thank the gifter ([#248](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/248)) ([b8f634e](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/b8f634ede03d5071c2daf4efb8ea9119a55e31cd))
+* **drops:** read more pages of the Drops directory for category discovery ([#250](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/250)) ([5f76583](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/5f76583404123dd681fa181eba79acde5cf461db)), closes [#211](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/211)
+* **notifications:** let the Apprise title name the event ([#26](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/26)) ([638145c](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/638145c5a010761efd46ba835c89945ca0c326b1))
+
+
+### Bug Fixes
+
+* **auth:** give Docker users workable Android login steps ([#256](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/256)) ([684504e](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/684504e24e2ac69d67f64e8f6b2655ea33371123))
+* **chat:** keep gift-sub thank-yous within IRC limits and template fallback ([#254](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/254)) ([8dd4d82](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/8dd4d82a755334b9eb1bd0beb501d8091d571813))
+* **chat:** require TLS 1.2 or newer for Twitch IRC ([#249](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/249)) ([1ccc051](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/1ccc05101f1ee6794ac36db60132adcbb6ae58c3))
+* **drops:** count a null Drops dashboard as unavailable under the Android login ([#28](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/28)) ([9e701dc](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/9e701dca0686084712a13b65ac70ab08da4de48e))
+* **drops:** escape dots in the Twitch settings-script URL pattern ([1ccc051](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/1ccc05101f1ee6794ac36db60132adcbb6ae58c3))
+* **security:** resolve CodeQL overlapping-range and error-exposure alerts ([#252](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/252)) ([a151848](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/a1518486558ec98eeb4fdb6de72c00ac80be0767))
+
 ## [3.20.0-post.5](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.4...3.20.0-post.5) (2026-11-11)
 
 
