@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.20.0-post.8](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.7...3.20.0-post.8) (2026-11-12)
+
+
+### Bug Fixes
+
+* **docker:** include Apprise in the Docker image ([9420da7](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/9420da73a1020b6bb4149bd1c46bd18822539d08))
+* **notifications:** keep Apprise credentials out of logs ([9420da7](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/9420da73a1020b6bb4149bd1c46bd18822539d08))
+* **update:** check this fork's releases and Docker image for updates ([#33](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/33)) ([39bf626](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/39bf626dc2a7e6615594d5be346af03a72104a06))
+
+
+### Documentation
+
+* **readme:** drop features upstream now has from "What this fork adds" ([9420da7](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/9420da73a1020b6bb4149bd1c46bd18822539d08))
+
 ## [3.20.0-post.7](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.6...3.20.0-post.7) (2026-11-12)
 
 
