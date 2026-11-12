@@ -2,14 +2,10 @@
 
 [Back to the README](../README.md)
 
-> [!IMPORTANT]
-> The Docker image (`zacharmstrong/twitch-channel-points-miner`) is built and
-> published by the upstream project,
-> [zarmstrong/Twitch-Channel-Points-Miner-v3](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3).
-> This fork does not publish its own image, so the image does not include this
-> fork's additions (see [What this fork adds](../README.md#what-this-fork-adds)).
-> To run them, use a [source checkout](../README.md#source-checkout) or build an
-> image from this repository with the [Docker image build guide](../BUILD.md#docker-images).
+This fork publishes its own image, `ghcr.io/klept0/twitch-channel-points-miner`, with every release. It
+includes this fork's additions (see
+[What this fork adds](../README.md#what-this-fork-adds)). Upstream's image,
+`zacharmstrong/twitch-channel-points-miner`, does not.
 
 Docker is the best fit for servers, NAS devices, and unattended operation.
 Choose either Docker Compose or the plain Docker CLI. Both examples persist the
@@ -23,7 +19,7 @@ Create an empty working directory containing this `compose.yml`:
 ```yaml
 services:
   miner:
-    image: zacharmstrong/twitch-channel-points-miner:latest
+    image: ghcr.io/klept0/twitch-channel-points-miner:latest
     restart: "no"
     stop_grace_period: 60s
     stdin_open: true
@@ -68,7 +64,7 @@ docker run --rm -it \
     -v "$(pwd)/logs:/usr/src/app/logs" \
     -v "$(pwd)/config:/usr/src/app/config" \
     -p 54455:54455 \
-    zacharmstrong/twitch-channel-points-miner:latest
+    ghcr.io/klept0/twitch-channel-points-miner:latest
 ```
 
 The container creates `config/config.py` and exits. Edit that file, replace the
@@ -87,7 +83,7 @@ docker run --name twitch-miner -it \
     -v "$(pwd)/logs:/usr/src/app/logs" \
     -v "$(pwd)/config:/usr/src/app/config" \
     -p 54455:54455 \
-    zacharmstrong/twitch-channel-points-miner:latest
+    ghcr.io/klept0/twitch-channel-points-miner:latest
 ```
 
 After the initial login, manage the existing container with
@@ -98,9 +94,9 @@ absolute host path, such as `C:\TwitchMiner\config`.
 The sections below cover multiple accounts, Portainer, time zones, and graceful
 shutdown behavior in more detail.
 
-## Docker Hub
+## Container registry
 
-Official Docker images are on https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner for `linux/amd64` and `linux/arm64`. The same tags are also published to the legacy https://hub.docker.com/r/zacharmstrong/twitch-channel-points-miner-v2 repository so existing installations continue to receive updates.
+This fork's images are on GitHub Container Registry as `ghcr.io/klept0/twitch-channel-points-miner` for `linux/amd64` and `linux/arm64`, tagged with each release version and `latest`. See the [package page](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/pkgs/container/twitch-channel-points-miner).
 
 The ARM64 image can run in compatible 64-bit Android Linux environments where
 the device reports `aarch64` or `arm64-v8a`. Android itself is not a supported
@@ -183,7 +179,7 @@ docker run --name user1 -it \
     -v $(pwd)/user1/logs:/usr/src/app/logs \
     -v $(pwd)/user1/analytics:/usr/src/app/analytics \
     -p 54456:54455 \
-    zacharmstrong/twitch-channel-points-miner
+    ghcr.io/klept0/twitch-channel-points-miner
 ```
 
 ```sh
@@ -193,7 +189,7 @@ docker run --name user2 -it \
     -v $(pwd)/user2/logs:/usr/src/app/logs \
     -v $(pwd)/user2/analytics:/usr/src/app/analytics \
     -p 54457:54455 \
-    zacharmstrong/twitch-channel-points-miner
+    ghcr.io/klept0/twitch-channel-points-miner
 ```
 
 ## Portainer

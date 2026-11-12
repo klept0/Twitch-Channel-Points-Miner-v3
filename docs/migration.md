@@ -83,7 +83,7 @@ does not launch mining. Conversion still refuses to replace an existing config.
 docker run --rm \
     -v $(pwd)/config:/usr/src/app/config \
     -v $(pwd)/run.py:/usr/src/app/run.py \
-    zacharmstrong/twitch-channel-points-miner --convert-only
+    ghcr.io/klept0/twitch-channel-points-miner --convert-only
 ```
 
 ## Legacy cookie migration (optional)

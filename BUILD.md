@@ -70,9 +70,11 @@ automated build definition.
 ## Docker images
 
 This section explains how to build this project locally and publish it to a
-Docker Hub repository. This fork has no automated Docker publishing; upstream's
-images are built by
-[upstream's Docker deployment workflow](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/blob/master/.github/workflows/deploy-docker.yml).
+Docker Hub repository. Releases are published automatically to
+`ghcr.io/klept0/twitch-channel-points-miner` by the
+[Docker deployment workflow](.github/workflows/deploy-docker.yml), which can
+also push to Docker Hub when the `DOCKERHUB_NAMESPACE` variable and the
+`DOCKER_USERNAME` and `DOCKER_TOKEN` secrets are set.
 
 Docker builds **images**. A container is created later when an image is run.
 

@@ -2,14 +2,9 @@
 
 [Back to the README](../README.md)
 
-> [!IMPORTANT]
-> The Windows installer and portable ZIP are built and published by the
-> upstream project,
-> [zarmstrong/Twitch-Channel-Points-Miner-v3](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3).
-> This fork does not publish its own releases, so the executable does not
-> include this fork's additions (see
-> [What this fork adds](../README.md#what-this-fork-adds)). To run them on
-> Windows, use a [source checkout](../README.md#source-checkout).
+This fork builds its own Windows installer and portable ZIP with every
+release, so they include this fork's additions (see
+[What this fork adds](../README.md#what-this-fork-adds)).
 
 The Windows executable does not require Python, Git, or Command Prompt.
 
@@ -38,8 +33,8 @@ so nothing is lost; this only happens once.
 
 ## Install the Windows executable
 
-1. Open the upstream project's
-   [Releases page](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/releases)
+1. Open this fork's
+   [Releases page](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/releases)
    and select the newest release.
 2. Under **Assets**, download `TwitchChannelPointsMiner-<version>-Setup.exe`
    for the Standard installer (recommended), or
@@ -106,7 +101,7 @@ logs are saved depends on which distribution you installed (see
 ## Update the miner
 
 - **Standard:** download and run the newest `-Setup.exe` from the
-  [Releases page](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/releases)
+  [Releases page](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/releases)
   and follow its prompts; it updates the installed program in place. Your
   configuration and login data live outside the install directory and are
   never affected.

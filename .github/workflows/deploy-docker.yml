@@ -1,0 +1,154 @@
+name: Publish Docker image
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Bare SemVer release tag to publish (for example, 3.20.0-post.8)
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Bare SemVer release tag to publish (for example, 3.20.0-post.8)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+# The image always goes to GitHub Container Registry, which needs no secrets.
+# Docker Hub is optional: set the DOCKERHUB_NAMESPACE repository variable and
+# the DOCKER_USERNAME and DOCKER_TOKEN secrets to publish there too.
+env:
+  DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+
+jobs:
+  deploy-docker:
+    name: Deploy Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ inputs.ref }}
+        shell: bash
+        run: |
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "${RELEASE_TAG}" =~ ${semver} ]]; then
+            echo "::error::ref must be a bare SemVer release tag such as 3.20.0-post.8"
+            exit 1
+          fi
+
+      - name: Name the images
+        id: names
+        shell: bash
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          ghcr="ghcr.io/${owner}/twitch-channel-points-miner"
+          images="${ghcr}"
+          if [[ -n "${DOCKERHUB_NAMESPACE}" ]]; then
+            images="${images}"$'\n'"${DOCKERHUB_NAMESPACE}/twitch-channel-points-miner"
+          fi
+          echo "ghcr=${ghcr}" >> "$GITHUB_OUTPUT"
+          {
+            echo "images<<EOF"
+            echo "${images}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Login to Docker Hub
+        if: env.DOCKERHUB_NAMESPACE != ''
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.names.outputs.images }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.ref }}
+            type=raw,value=latest
+
+      - name: Build and push AMD64 and ARM64
+        id: docker_build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Update Docker Hub description
+        if: env.DOCKERHUB_NAMESPACE != ''
+        uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa # v5.0.0
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+          repository: ${{ env.DOCKERHUB_NAMESPACE }}/twitch-channel-points-miner
+          short-description: Automatically earn Twitch channel points, claim Drops, and manage predictions.
+          readme-filepath: ./DOCKERHUB.md
+
+      - name: Add Docker image to GitHub release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.ref }}
+          IMAGE: ${{ steps.names.outputs.ghcr }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+
+          if ! gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "No GitHub release found for ${RELEASE_TAG}; skipping release notes update."
+            exit 0
+          fi
+
+          release_notes=$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""')
+          release_notes=$(printf '%s\n' "${release_notes}" | sed '/<!-- docker-image:start -->/,/<!-- docker-image:end -->/d')
+          docker_notes=$(cat <<NOTES
+          <!-- docker-image:start -->
+          ### Docker image
+
+          * [\`${IMAGE}:${version}\`](https://github.com/${GITHUB_REPOSITORY}/pkgs/container/twitch-channel-points-miner)
+
+          \`\`\`bash
+          docker pull ${IMAGE}:${version}
+          \`\`\`
+          <!-- docker-image:end -->
+          NOTES
+          )
+          notes_file=$(mktemp)
+          trap 'rm -f "${notes_file}"' EXIT
+          printf '%s\n\n%s\n' "${release_notes}" "${docker_notes}" > "${notes_file}"
+          gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --notes-file "${notes_file}"
+
+      - name: Image digest AMD64 and ARM64
+        env:
+          DIGEST: ${{ steps.docker_build.outputs.digest }}
+        run: echo "${DIGEST}"
