@@ -147,7 +147,7 @@ def test_available_update_gives_docker_latest_image_instructions(monkeypatch, ca
     record = next(
         record for record in caplog.records if "Update available" in record.msg
     )
-    assert "zacharmstrong/twitch-channel-points-miner:latest" in record.msg
+    assert "ghcr.io/klept0/twitch-channel-points-miner:latest" in record.msg
     assert "docker compose pull && docker compose up -d" in record.msg
     assert "/releases/latest" not in record.msg
 

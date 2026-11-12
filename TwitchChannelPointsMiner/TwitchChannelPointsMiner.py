@@ -45,7 +45,7 @@ from TwitchChannelPointsMiner.classes.Settings import (
 )
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.classes.WebSocketsPool import WebSocketsPool
-from TwitchChannelPointsMiner.constants import GITHUB_REPOSITORY_URL
+from TwitchChannelPointsMiner.constants import DOCKER_IMAGE, GITHUB_REPOSITORY_URL
 from TwitchChannelPointsMiner.data_migration import (
     DataMigrationError,
     migrate_analytics_directory,
@@ -1544,7 +1544,7 @@ class TwitchChannelPointsMiner:
             if _is_running_in_container():
                 update_instructions = (
                     "Docker deployment detected. On the Docker host, pull "
-                    "zacharmstrong/twitch-channel-points-miner:latest and recreate "
+                    f"{DOCKER_IMAGE}:latest and recreate "
                     "the container. Docker Compose: docker compose pull && "
                     "docker compose up -d"
                 )

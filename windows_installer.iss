@@ -54,7 +54,7 @@ Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameter
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
-Filename: "https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3#configuration-file"; Description: "Open the configuration guide"; Flags: shellexec postinstall skipifsilent unchecked
+Filename: "https://github.com/klept0/Twitch-Channel-Points-Miner-v3/blob/master/docs/configuration.md"; Description: "Open the configuration guide"; Flags: shellexec postinstall skipifsilent unchecked
 
 [Code]
 const
