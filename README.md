@@ -247,10 +247,6 @@ Licensed under the [GNU General Public License v3.0](LICENSE).
 If this helps you, give it a ⭐️. Found a bug or have a question?
 [Open an issue](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues).
 
-To support this fork's maintainer, klept0:
-
-[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/its_klept0)
-
 To support the upstream maintainer, zarmstrong:
 
 [![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/B0B61NBJ0)
