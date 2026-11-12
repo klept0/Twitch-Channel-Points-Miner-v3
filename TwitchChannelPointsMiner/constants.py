@@ -43,8 +43,14 @@ USER_AGENTS = {
     },
 }
 
-GITHUB_REPOSITORY_URL = "https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3"
-GITHUB_LATEST_RELEASE_API = "https://api.github.com/repos/zarmstrong/Twitch-Channel-Points-Miner-v3/releases/latest"
+# Fork builds check this fork's releases and image, since upstream's builds
+# lack the fork-only features. Point these back at zarmstrong once upstream
+# carries them all.
+GITHUB_REPOSITORY_URL = "https://github.com/klept0/Twitch-Channel-Points-Miner-v3"
+GITHUB_LATEST_RELEASE_API = (
+    "https://api.github.com/repos/klept0/Twitch-Channel-Points-Miner-v3/releases/latest"
+)
+DOCKER_IMAGE = "ghcr.io/klept0/twitch-channel-points-miner"
 
 
 class GQLOperations:
