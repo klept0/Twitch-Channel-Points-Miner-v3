@@ -57,10 +57,9 @@ These features are in this fork's `master` branch but not in upstream:
 | ⚡ Fast Drop claims | Claims Drops as soon as PubSub reports them claimable, including on channels the miner isn't tracking. | |
 | 🛟 Raw-query fallback | Resends a GraphQL query as raw text when Twitch rejects its persisted hash. | |
 
-> [!IMPORTANT]
-> The Docker image and the Windows executable are built by upstream. They do
-> not include these additions. To use them, run a
-> [source checkout](#source-checkout).
+This fork's [Docker image](#docker) and
+[Windows executable](#windows-executable) are built from this repository, so
+they include these additions.
 
 ## Before you start
 
@@ -96,8 +95,8 @@ You need a Twitch account and one of the following.
 | Method | Best for | Includes fork additions |
 | :-- | :-- | :-- |
 | [Source checkout](#source-checkout) | Any OS; this fork's features | ✅ Yes |
-| [Docker](#docker) | Servers, NAS devices, unattended use | ❌ No (upstream image) |
-| [Windows executable](#windows-executable) | Windows 10/11 without Python | ❌ No (upstream build) |
+| [Docker](#docker) | Servers, NAS devices, unattended use | ✅ Yes |
+| [Windows executable](#windows-executable) | Windows 10/11 without Python | ✅ Yes |
 
 ### Source checkout
 
@@ -119,13 +118,13 @@ To keep it running unattended, with automatic restarts and updates, see the
 
 ### Docker
 
-The upstream image `zacharmstrong/twitch-channel-points-miner` runs on
+This fork's image `ghcr.io/klept0/twitch-channel-points-miner` runs on
 `linux/amd64` and `linux/arm64`. A minimal `compose.yml`:
 
 ```yaml
 services:
   miner:
-    image: zacharmstrong/twitch-channel-points-miner:latest
+    image: ghcr.io/klept0/twitch-channel-points-miner:latest
     restart: "no"
     stop_grace_period: 60s
     stdin_open: true
@@ -151,9 +150,9 @@ accounts, Portainer, time zones, and graceful shutdowns.
 
 ### Windows executable
 
-Upstream publishes a Windows installer and a portable ZIP that need no Python
-or Git. Download `TwitchChannelPointsMiner-<version>-Setup.exe` from the
-[upstream Releases page](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/releases),
+Each release includes a Windows installer and a portable ZIP that need no
+Python or Git. Download `TwitchChannelPointsMiner-<version>-Setup.exe` from the
+[Releases page](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/releases),
 run it, and fill in the **Config** tab when the app opens.
 
 The [Windows guide](docs/windows.md) covers the standard and portable builds,
