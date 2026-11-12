@@ -5,7 +5,7 @@
 ## BetSettings
 
 | Key | Type | Default | Description |
-| :-- | :-- | :-- | :-- |
+|---|---|---|---|
 | `strategy` | Strategy | `SMART` | Prediction outcome-selection strategy. |
 | `percentage` | int | `5` | Percentage of the current balance to place. |
 | `percentage_gap` | int | `20` | Percentage-point gap used by the SMART strategy. |
@@ -46,7 +46,7 @@ miner selects “over 7.5.”
 ### FilterCondition
 
 | Key | Type | Default | Description |
-| :-- | :-- | :-- | :-- |
+|---|---|---|---|
 | `by` | OutcomeKeys | `None` | Prediction value to evaluate. |
 | `where` | Condition | `None` | Comparison operator. |
 | `value` | number | `None` | Comparison target. |

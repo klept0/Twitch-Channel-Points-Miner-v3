@@ -59,7 +59,7 @@ settings.
 ## Category configuration reference
 
 | Option | Default | Description |
-| :-- | :-- | :-- |
+|---|---:|---|
 | `categories` | `[]` | Category names, slugs, URLs, or category/streamer selectors to discover. |
 | `category_drops_enabled` | `True` | Require the live channel to have a `DropsEnabled` tag. This also affects campaign eligibility checks. |
 | `category_limit` | `30` | Maximum channels returned by a normal category search. Values below 1 behave as 1. Restricted campaign discovery may select up to 20 live channels per campaign instead. |
@@ -120,7 +120,7 @@ not supported on a URL; use the category name or slug form.
 `category_sort` accepts a `CategorySort` member or its string value:
 
 | Value | Selection behavior |
-| :-- | :-- |
+|---|---|
 | `ORDER` | Keep Twitch's API order. |
 | `VIEWERS_DESC` | Highest viewer count first. This is the default. |
 | `VIEWERS_ASC` | Lowest viewer count first. |
@@ -240,7 +240,7 @@ MINE_CONFIG = {
 ```
 
 | Option | Default | Description |
-| :-- | :-- | :-- |
+|---|---:|---|
 | `wildcard_categories` | `False` | Enable the fallback. Only activates once the preferred `categories` pass produces zero live streamers this cycle. |
 | `wildcard_category_limit` | `10` | Maximum distinct wildcard categories added per refresh cycle. With `wildcard_category_pin_active=True`, an already-tracked wildcard category doesn't count against this cap, so the effective tracked count can exceed it -- that throttles new additions only, it does not cap the total. |
 | `wildcard_category_streamer_limit` | `1` | Live channels pulled per wildcard category. Kept small by default since this is best-effort filler, not a curated list. |
@@ -308,6 +308,20 @@ MINE_CONFIG = {
     "track_category_streamer_points": True,
 }
 ```
+
+## Category troubleshooting
+
+| Symptom | What to check |
+|---|---|
+| No category streamers are loaded | Confirm the game has an active, incomplete campaign and try its Twitch directory URL. Enable `print_open_drop_campaigns_on_load=True` to inspect detected campaigns. |
+| A live channel is skipped | With `category_drops_enabled=True`, it must have the `DropsEnabled` tag. Restricted campaigns may also require the channel to be on the campaign's allowlist. |
+| A forced streamer is skipped | Confirm the login is live, streaming the requested game, and has the Drops tag when required. |
+| The chosen channels are unexpected | Check `category_sort`, `category_limit`, category order, and `CategoryCampaignOrder`. Restricted campaign allowlists take precedence over a normal category search. |
+| A removed category still affects selection | Refresh only adds streamers; restart the miner to remove already-loaded category channels. |
+| Category messages are missing | Set `category_log_level=logging.INFO` or `logging.DEBUG` and ensure the logger/console threshold permits that level. |
+| Analytics omit channel point changes | Set `track_category_streamer_points=True`; it defaults to `False` for category-only channels. |
+| Wildcard categories never activate | They only run once the preferred `categories` pass produces zero live streamers this cycle -- a long `categories` list with even one currently-live match will keep wildcard standing down. Confirm `wildcard_categories=True`, and check whether any configured category currently has a live matching channel, e.g. via `print_open_drop_campaigns_on_load=True` and `category_log_level=logging.DEBUG`. |
+| A wildcard channel keeps getting swapped out | Set `wildcard_category_pin_active=True` (the default) so an already-tracked wildcard category isn't dropped just for falling out of the top `wildcard_category_limit` on a re-sort. |
 
 A channel eligible for both `auto_mine_badge_drops` and
 `wildcard_categories` at once is claimed by whichever source

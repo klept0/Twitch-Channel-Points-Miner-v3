@@ -35,7 +35,7 @@ Assign this object to `MINER_CONFIG["logger_settings"]`. The complete
 Placeholder values are ignored; use real credentials and never commit them.
 
 | Provider | Destination | Class |
-| :-- | :-- | :-- |
+|---|---|---|
 | Telegram | Bot chat | `Telegram` |
 | Discord | Channel webhook | `Discord` |
 | Generic webhook | HTTP endpoint | `Webhook` |
@@ -63,7 +63,7 @@ Create a bot with [@BotFather](https://t.me/botfather), then obtain the numeric
 destination `chat_id` (for example with [@getmyid_bot](https://t.me/getmyid_bot)).
 
 | Key | Type | Default | Description |
-| :-- | :-- | :-- | :-- |
+|---|---|---|---|
 | `chat_id` | int | Required | Numeric Telegram chat ID. |
 | `token` | str | Required | Bot token issued by BotFather. |
 | `events` | list | Required | Events to send. |
@@ -86,7 +86,7 @@ In the destination channel, open **Edit Channel > Integrations > Webhooks**,
 create a webhook, and copy its URL.
 
 | Key | Type | Default | Description |
-| :-- | :-- | :-- | :-- |
+|---|---|---|---|
 | `webhook_api` | str | Required | Discord webhook URL. |
 | `events` | list | Required | Events to send. |
 
@@ -103,7 +103,7 @@ Discord(
 as form fields in the request body for `POST`.
 
 | Key | Type | Default | Description |
-| :-- | :-- | :-- | :-- |
+|---|---|---|---|
 | `endpoint` | str | Required | Destination URL. |
 | `method` | str | Required | `POST` or `GET`. |
 | `events` | list | Required | Events to send. |
@@ -127,7 +127,7 @@ hard-to-guess topic and do not commit it. Protected topics can use an access
 token.
 
 | Key | Type | Default | Description |
-| :-- | :-- | :-- | :-- |
+|---|---|---|---|
 | `topic` | str | Required | Destination topic name. |
 | `events` | list | Required | Events to send. |
 | `server_url` | str | `"https://ntfy.sh"` | Hosted or self-hosted ntfy server URL. |
@@ -160,9 +160,9 @@ on how you run the miner:
 
 | How you run the miner | Apprise |
 |---|---|
-| [Source checkout](../README.md#source-checkout) | Install it with `pip install -r requirements-optional.txt`. |
-| [Docker](docker.md) | Included in images built from this repository's `Dockerfile`. |
-| [Windows executable](windows.md) | Not available. Use one of the built-in providers above (Telegram, Discord, ntfy and the others), or run the miner from a source checkout. |
+| [Docker](docker.md#docker) | Included. Nothing to install. |
+| [Source checkout](../README.md#source-checkout-quick-start) | Install it with `pip install -r requirements-optional.txt`. |
+| [Windows executable](windows.md#windows) | Not available. Use one of the built-in providers above (Telegram, Discord, ntfy and the others), or run the miner from a source checkout or Docker. |
 
 Apprise is not part of `requirements.txt` because it brings about 20 more
 packages, one of which is compiled. On platforms without prebuilt packages,
@@ -174,12 +174,8 @@ The **Config** tab of the desktop window and web dashboard does not list
 Apprise. Add it to `config/config.py` by hand; saving from the Config tab
 keeps it.
 
-Apprise's own log output is turned off, because it prints full service URLs,
-which hold webhook tokens, bot tokens and private ntfy topics. Failed sends
-are still reported, without the URL.
-
 | Key | Type | Default | Description |
-| :-- | :-- | :-- | :-- |
+|---|---|---|---|
 | `urls` | str or list | Required | One or more Apprise service URLs. |
 | `events` | list | Required | Events to send. |
 | `title` | str | `"Twitch Channel Points Miner"` | Notification title. `{event}` is replaced with the event name, such as `DROP_CLAIM`. |
@@ -239,7 +235,7 @@ Apprise(
 Matrix logs in when configured, then sends plain-text messages to the room.
 
 | Key | Type | Default | Description |
-| :-- | :-- | :-- | :-- |
+|---|---|---|---|
 | `username` | str | Required | Username accepted by the homeserver. |
 | `password` | str | Required | Matrix account password. |
 | `homeserver` | str | Required | Hostname without `https://`, such as `matrix.org`. |
@@ -265,7 +261,7 @@ Create an application at [Pushover](https://pushover.net/), then use the account
 user key and application API token.
 
 | Key | Type | Default | Description |
-| :-- | :-- | :-- | :-- |
+|---|---|---|---|
 | `userkey` | str | Required | Pushover user or group key. |
 | `token` | str | Required | Application API token. |
 | `priority` | int | Required | [Pushover message priority](https://pushover.net/api#priority). Later messages of a split notification go at quiet priority (-1), or -2 when the configured priority is -2 or lower. |
@@ -288,7 +284,7 @@ Create an application in Gotify and use its message endpoint, including the
 application token.
 
 | Key | Type | Default | Description |
-| :-- | :-- | :-- | :-- |
+|---|---|---|---|
 | `endpoint` | str | Required | Message URL, such as `https://gotify.example/message?token=TOKEN`. |
 | `priority` | int | Required | Priority passed to Gotify. |
 | `events` | list | Required | Events to send. |
@@ -307,7 +303,7 @@ Email uses Python's built-in SMTP support and accepts one recipient or a list or
 tuple of recipients.
 
 | Key | Type | Default | Description |
-| :-- | :-- | :-- | :-- |
+|---|---|---|---|
 | `host` | str | Required | SMTP server hostname. |
 | `port` | int | Required | SMTP server port. |
 | `sender` | str | Required | Address placed in the `From` header. |
@@ -341,36 +337,3 @@ them from the next report. The report also lists finished Drops that Twitch
 won't deliver until the campaign's game account is linked, with the link URL,
 every day until the account is linked. An overdue report is sent after startup
 finishes refreshing streamer balances.
-
-# Events
-
-Import `Events` from `TwitchChannelPointsMiner.classes.Settings` and select any
-of these values in each provider's `events` list.
-
-| Event | Sent when |
-| :-- | :-- |
-| `UPDATE_AVAILABLE` | The update checker finds a newer release. This alert is forced through every configured provider when update checking is enabled. |
-| `DAILY_REPORT` | The scheduled point and Drop activity summary is generated. Requires `daily_report=True`. |
-| `STREAMER_ONLINE` | A tracked streamer goes live. |
-| `STREAMER_OFFLINE` | A tracked streamer goes offline. |
-| `GAIN_FOR_RAID` | Channel points are earned for joining a raid. |
-| `GAIN_FOR_CLAIM` | Channel points are earned from a claimed bonus. |
-| `GAIN_FOR_WATCH` | Channel points are earned for watch time. |
-| `GAIN_FOR_WATCH_STREAK` | Channel points are earned from a watch-streak reward. |
-| `BET_WIN` | A prediction wins and its result is credited. |
-| `BET_LOSE` | A prediction loses. |
-| `BET_REFUND` | A prediction is canceled or refunded. |
-| `BET_FILTERS` | A prediction is skipped because a configured filter does not match. |
-| `BET_GENERAL` | General prediction decisions or status messages are produced. |
-| `BET_FAILED` | A prediction cannot be placed. |
-| `BET_START` | A prediction window opens. |
-| `BONUS_CLAIM` | The periodic channel-points bonus is claimed. |
-| `MOMENT_CLAIM` | A Twitch Moment is claimed. |
-| `JOIN_RAID` | The miner follows a raid to another channel. |
-| `DROP_CLAIM` | A completed Drop reward is claimed. |
-| `DROP_STATUS` | Drop discovery, eligibility, or progress status is reported. This can be verbose. |
-| `DROP_LINK_REQUIRED` | A finished Drop can't be claimed because the campaign's game account isn't linked to Twitch. Sent once per campaign per run (so again after a restart) with the link URL, and once more when its Drops have been claimed. |
-| `CHAT_MENTION` | The configured username is mentioned in joined chat. Chat presence must be enabled. |
-| `GIFTED_SUB` | Someone gifts this account a sub in a joined chat. Chat presence must be enabled. Anonymous gifts are reported as "An Anonymous Gifter". |
-| `CONFIGURATION` | Startup, reload, authentication, or other configuration information requires attention. Critical authentication alerts may be forced through configured providers. |
-| `WATCH_STATUS` | Never sent. It only names the *Watching for points* status line for `ColorPalette`; adding it to a notifier's `events` has no effect. |
