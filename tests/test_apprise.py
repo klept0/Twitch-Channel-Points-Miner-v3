@@ -1,10 +1,17 @@
+import inspect
+import logging
 import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from TwitchChannelPointsMiner.classes.Apprise import EXAMPLE_URLS, Apprise
+from TwitchChannelPointsMiner.classes.Apprise import (
+    EXAMPLE_URLS,
+    MISSING_FROM_EXECUTABLE,
+    MISSING_PACKAGE,
+    Apprise,
+)
 from TwitchChannelPointsMiner.classes.Settings import Events
-from TwitchChannelPointsMiner.logger import NotificationHandler
+from TwitchChannelPointsMiner.logger import LoggerSettings, NotificationHandler
 
 
 def fake_apprise_module(delivered=True, accepts=True):
@@ -77,7 +84,7 @@ def test_apprise_reports_undelivered_notification():
 
     assert notifier.send("claimed", Events.DROP_CLAIM) == (
         False,
-        "Apprise could not deliver the notification to any service.",
+        "Apprise could not deliver the notification to every service.",
     )
 
 
@@ -96,10 +103,23 @@ def test_apprise_reports_missing_package():
     with patch.dict(sys.modules, {"apprise": None}):
         notifier = Apprise(["discord://123/abc"], [Events.DROP_CLAIM])
 
+    assert notifier.send("claimed", Events.DROP_CLAIM) == (False, MISSING_PACKAGE)
+    assert "requirements-optional.txt" in MISSING_PACKAGE
+
+
+def test_apprise_missing_from_windows_executable_names_alternatives():
+    # pip cannot add packages to the frozen executable, so it must not be advised.
+    with (
+        patch.dict(sys.modules, {"apprise": None}),
+        patch.object(sys, "frozen", True, create=True),
+    ):
+        notifier = Apprise(["discord://123/abc"], [Events.DROP_CLAIM])
+
     assert notifier.send("claimed", Events.DROP_CLAIM) == (
         False,
-        "The apprise package is not installed. Run: pip install apprise",
+        MISSING_FROM_EXECUTABLE,
     )
+    assert "pip" not in MISSING_FROM_EXECUTABLE
 
 
 def test_apprise_without_urls_does_not_import_the_package():
@@ -121,6 +141,79 @@ def test_apprise_reports_when_every_url_is_invalid():
         False,
         "No valid Apprise URL is configured.",
     )
+
+
+def test_apprise_drops_example_urls_kept_beside_real_ones():
+    module, client = fake_apprise_module()
+    with patch.dict(sys.modules, {"apprise": module}):
+        notifier = Apprise([*EXAMPLE_URLS, "discord://123/abc"], [Events.DROP_CLAIM])
+
+    assert notifier.urls == ["discord://123/abc"]
+    assert [call.args for call in client.add.call_args_list] == [("discord://123/abc",)]
+
+
+def test_apprise_with_only_example_urls_does_not_import_the_package():
+    with patch.dict(sys.modules, {"apprise": None}):
+        notifier = Apprise(list(EXAMPLE_URLS), [Events.DROP_CLAIM])
+
+    assert notifier.urls == []
+    assert notifier.send("claimed", Events.DROP_CLAIM) == (
+        False,
+        "No Apprise URL is configured.",
+    )
+
+
+def test_apprise_library_records_never_reach_the_logs(caplog):
+    # Apprise quotes service URLs, which hold credentials, even at ERROR.
+    secret = "FAKE_SECRET_TOKEN"
+    with caplog.at_level(logging.DEBUG):
+        for level in (logging.DEBUG, logging.WARNING, logging.ERROR, logging.CRITICAL):
+            logging.getLogger("apprise").log(level, f"Unsupported URL: {secret}")
+            logging.getLogger("apprise.plugins").log(level, f"URL: {secret}")
+
+    assert secret not in caplog.text
+
+
+def test_apprise_invalid_url_log_keeps_only_a_valid_scheme(caplog):
+    secret = "FAKE_SECRET_TOKEN"
+    urls = [
+        f"discord://123/{secret}",
+        f"discord:/123/{secret}",
+        secret,
+        f"{secret} ://x",
+    ]
+    module, _ = fake_apprise_module(accepts=False)
+    with caplog.at_level(logging.ERROR), patch.dict(sys.modules, {"apprise": module}):
+        Apprise(urls, [Events.DROP_CLAIM])
+
+    assert secret not in caplog.text
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages == [
+        "Apprise: invalid notification URL ignored: discord://...",
+        "Apprise: invalid notification URL ignored: a URL",
+        "Apprise: invalid notification URL ignored: a URL",
+        "Apprise: invalid notification URL ignored: a URL",
+    ]
+
+
+def test_logger_settings_keeps_positional_arguments_before_apprise():
+    # apprise was added last, so calls written for the earlier signature
+    # still bind email and the settings after it to the same parameters.
+    params = list(inspect.signature(LoggerSettings.__init__).parameters.values())[1:]
+    names = [param.name for param in params]
+    assert names[-1] == "apprise"
+    assert names[names.index("ntfy") + 1] == "email"
+
+    email = object()
+    args = [param.default for param in params[: names.index("email") + 1]]
+    args[-1] = email
+    args += [True, "08:30", "someone"]  # daily_report, daily_report_time, username
+    settings = LoggerSettings(*args)
+
+    assert settings.email is email
+    assert settings.apprise is None
+    assert (settings.daily_report, settings.daily_report_time) == (True, "08:30")
+    assert settings.username == "someone"
 
 
 def test_logger_skips_example_apprise_urls():

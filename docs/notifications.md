@@ -44,7 +44,7 @@ Placeholder values are ignored; use real credentials and never commit them.
 | Gotify | Self-hosted Gotify application | `Gotify` |
 | Email | Addresses reached through SMTP | `Email` |
 | ntfy | ntfy topic (hosted or self-hosted) | `Ntfy` |
-| Apprise | Any of 100+ services, one URL each | `Apprise` |
+| Apprise | Any of 100+ services, one URL each (not in the Windows executable, see [Apprise](#apprise)) | `Apprise` |
 
 Telegram, Discord and Pushover split a message that is too long to send in
 one piece into consecutive messages, breaking at line ends where possible. A
@@ -155,8 +155,28 @@ which supports more than 100 services. Each destination is one URL, such as
 `discord://`, `tgram://` or `ntfy://`; see the
 [Apprise wiki](https://github.com/caronc/apprise/wiki) for every format.
 
-Apprise is optional. Install it with `pip install apprise` only if you use this
-notifier. Without it, the miner logs one warning and keeps running.
+Apprise is an optional package, so whether you can use this notifier depends
+on how you run the miner:
+
+| How you run the miner | Apprise |
+|---|---|
+| [Source checkout](../README.md#source-checkout) | Install it with `pip install -r requirements-optional.txt`. |
+| [Docker](docker.md) | Included in images built from this repository's `Dockerfile`. |
+| [Windows executable](windows.md) | Not available. Use one of the built-in providers above (Telegram, Discord, ntfy and the others), or run the miner from a source checkout. |
+
+Apprise is not part of `requirements.txt` because it brings about 20 more
+packages, one of which is compiled. On platforms without prebuilt packages,
+that would slow down or break every install, even for people who never use
+Apprise. When the package is missing, the miner keeps running and logs one
+warning at the first notification. The warning says how to fix it.
+
+The **Config** tab of the desktop window and web dashboard does not list
+Apprise. Add it to `config/config.py` by hand; saving from the Config tab
+keeps it.
+
+Apprise's own log output is turned off, because it prints full service URLs,
+which hold webhook tokens, bot tokens and private ntfy topics. Failed sends
+are still reported, without the URL.
 
 | Key | Type | Default | Description |
 | :-- | :-- | :-- | :-- |
