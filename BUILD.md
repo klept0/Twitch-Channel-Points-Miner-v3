@@ -21,6 +21,16 @@ py -m pip install -r requirements-windows.txt
 py -m pip install pyinstaller==6.21.0
 ```
 
+Do not install `requirements-optional.txt` for this build. The executable does
+not include the optional Apprise notifier. Supporting it would likely take more
+than installing the package: the miner imports Apprise only when it is
+configured, and Apprise discovers its service plugins at runtime, so
+PyInstaller would need explicit hidden imports for both, and the result is
+untested. When someone configures Apprise, the executable says it is not
+included. The
+[README](README.md#apprise) tells Windows users to use another provider, a
+source checkout or Docker instead.
+
 Build the executable:
 
 ```powershell
@@ -65,6 +75,11 @@ images are built by
 [upstream's Docker deployment workflow](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3/blob/master/.github/workflows/deploy-docker.yml).
 
 Docker builds **images**. A container is created later when an image is run.
+
+The image installs `requirements.txt` and `requirements-optional.txt`.
+The optional file holds packages imported only when their feature is
+configured, currently Apprise. Docker users cannot add packages that survive
+recreating the container, so the image includes them.
 
 ### Prerequisites
 
