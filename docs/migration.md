@@ -42,7 +42,7 @@ exactly one `.mine(...)` call, and no more than one `.analytics(...)` call. The
 converter maps them as follows:
 
 | Legacy expression | New configuration value |
-| :-- | :-- |
+|---|---|
 | Arguments to `TwitchChannelPointsMiner(...)` | `MINER_CONFIG` |
 | First positional argument to `.mine(...)` | `STREAMERS` |
 | Keyword arguments to `.mine(...)` | `MINE_CONFIG` |
@@ -114,7 +114,7 @@ To reuse an old cookie:
    its structure, rewrites it as JSON, and limits its permissions to the owner.
 
 For Docker, the host directory must be mounted at `/usr/src/app/cookies` as shown
-in [Docker](docker.md). The same per-account filename rule applies inside the
+in [Docker](docker.md#docker). The same per-account filename rule applies inside the
 mounted directory. Use a separate cookie and config directory for each account.
 
 The legacy cookie may no longer be accepted by Twitch. If the miner reports an

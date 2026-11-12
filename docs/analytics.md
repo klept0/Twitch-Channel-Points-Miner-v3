@@ -21,10 +21,10 @@ and renamed to `.web-config.json.migrated.bak`. Notification
 credentials are write-only in the browser: existing values are reported only
 as configured, never returned by the API, and blank credential fields retain
 the saved value. Protect the Config tab with the same analytics authentication
-and HTTPS guidance described in the next section.
+and HTTPS guidance described below.
 
 | Light theme | Dark theme |
-| :-- | :-- |
+| ----------- | ---------- |
 | ![Light theme](https://raw.githubusercontent.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/master/assets/chart-analytics-light.png) | ![Dark theme](https://raw.githubusercontent.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/master/assets/chart-analytics-dark.png) |
 
 Enable storage with `MINER_CONFIG["enable_analytics"] = True` and configure the
@@ -40,7 +40,6 @@ For access from another machine, bind to `0.0.0.0` and provide a strong
 configured Twitch username and analytics password. The built-in server uses
 plain HTTP, so expose it only on a trusted network or behind an HTTPS reverse
 proxy. Background and design context are available in [issue #96](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/96).
-
 ```python
 MINER_CONFIG = {
     "username": "your-twitch-username",

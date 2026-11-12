@@ -5,7 +5,7 @@
 ## Configuration sections
 
 | Name | Passed to | Purpose |
-| :-- | :-- | :-- |
+|---|---|---|
 | `MINER_CONFIG` | `TwitchChannelPointsMiner(...)` | Account, priority, default streamer behavior, logging, notifications, and global runtime options. |
 | `STREAMERS` | First argument of `mine(...)` | Ordered streamer logins or `Streamer` objects with per-channel overrides. Use `[]` when relying only on followers or categories. |
 | `MINE_CONFIG` | Keyword arguments of `mine(...)` | Followers, blacklist, category discovery, Drops diagnostics, and other mining-session options. Do not include `streamers` here. |
@@ -109,7 +109,7 @@ combine followed channels with `STREAMERS`, apply a blacklist, configure followe
 ordering, discover channels by category, and control category/Drop diagnostics.
 The streamer list itself belongs in `STREAMERS`, not in this dictionary.
 
-### ANALYTICS_CONFIG
+## ANALYTICS_CONFIG
 
 Set `ANALYTICS_CONFIG` to `None` when the web server is not needed. Otherwise,
 provide the keyword arguments for `analytics(...)`, such as `host`, `port`,

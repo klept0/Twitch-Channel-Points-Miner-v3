@@ -2,11 +2,11 @@
 
 [Back to the README](../README.md)
 
-This fork builds its own Windows installer and portable ZIP with every
-release, so they include this fork's additions (see
-[What this fork adds](../README.md#what-this-fork-adds)).
-
 The Windows executable does not require Python, Git, or Command Prompt.
+
+It includes every feature except the optional [Apprise](notifications.md#apprise) notifier.
+All the other notification providers work. To use Apprise on Windows, run the
+miner from a [source checkout](../README.md#source-checkout-quick-start) or Docker.
 
 ## Standard vs. portable
 
@@ -33,7 +33,7 @@ so nothing is lost; this only happens once.
 
 ## Install the Windows executable
 
-1. Open this fork's
+1. Open the project's
    [Releases page](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/releases)
    and select the newest release.
 2. Under **Assets**, download `TwitchChannelPointsMiner-<version>-Setup.exe`
@@ -68,7 +68,7 @@ opens straight to the Dashboard tab's **Config** view.
    `config\config.py`, under `ANALYTICS_CONFIG`).
 2. Under **Configured streamers**, add the channels you want to watch.
 3. Review the other Config tab sections - categories, sources, logging, and
-   notifications. The [configuration guide](configuration.md) explains
+   notifications. The [configuration guide](../README.md#configuration-file) explains
    every section in more detail; anything not covered by the Config tab can
    still be edited directly in `config\config.py` with Notepad.
 
@@ -114,9 +114,6 @@ logs are saved depends on which distribution you installed (see
   5. Start the miner normally. Your existing configuration and login data
      remain in place.
 
-Developers who want to create the executable from source can use the
-[Windows build guide](../BUILD.md#windows-executable).
-
 ## Windows troubleshooting
 
 - **The desktop window never appears, or a console window flashes and
@@ -145,3 +142,6 @@ Developers who want to create the executable from source can use the
   the `logs` folder beside the executable for a portable one) and check the
   newest log file. Remove account names, cookies, tokens, and passwords
   before sharing a log in a bug report.
+
+Developers who want to create the executable from source can use the
+[Windows build guide](../BUILD.md#windows-executable).

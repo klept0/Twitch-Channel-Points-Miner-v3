@@ -32,10 +32,11 @@ By default the miner logs in as Twitch's TV app. Twitch withholds some Drops
 data from that app: the Drops dashboard and campaign details come back empty,
 so the miner works from your inventory, channel listings and a shared campaign
 list instead. Set `"android_login": True` in `MINER_CONFIG` (or tick **Log in as
-the Android app** in the dashboard's **Twitch login** box) to log in as
-Twitch's Android app, which gets the full dashboard and campaign details,
-including channel allow-lists. Watching, drop progress, drop claims and
-channel points work the same way under either login.
+the Android app** in the dashboard's **Twitch login** box) to log in as Twitch's
+Android app, which gets the full dashboard and campaign details, including
+channel allow-lists. Watch time, drop progress, drop claims and channel points
+have been verified to work under this login; predictions, raids and moments use
+the same requests but have not yet been tested under it.
 
 The Android app has no activation code, so the first start asks you to sign
 in through a browser:
@@ -68,10 +69,13 @@ replace an old `TWITCH_ANDROID_LOGIN` value with a fresh redirect URL.
 Like the TV login, this impersonates an official Twitch app. Twitch could change
 or block it at any time.
 
+Thanks to [klept0](https://github.com/klept0) for testing this login live and
+implementing it.
+
 ## LoggerSettings
 
 | Key | Type | Default | Description |
-| :-- | :-- | :-- | :-- |
+|---|---|---|---|
 | `save` | bool | `True` | Save logs to rotating files. |
 | `less` | bool | `False` | Use compact log formatting and shorter messages. |
 | `console_format` | str or `LoggingFormat` | `"text"` | Console log format: `"text"` or `"json"`. JSON writes one object per line with an ISO 8601 timestamp (offset included), the account `username`, and the `event` name when present. `emoji`, `colored`, and `date_format` only affect `"text"`; `less` also shortens the messages themselves, so it changes the JSON `message` field too. |
@@ -98,7 +102,6 @@ or block it at any time.
 | `daily_report_time` | str | `"00:00"` | Local delivery time for the daily report, in 24-hour `HH:MM` format. |
 
 ### Color Palette
-
 `ColorPalette` customizes console colors by event name. Unspecified events use
 `Fore.RESET`, while prediction wins and losses default to green and red. The
 *Watching for points* status line has its own `WATCH_STATUS` key, which
@@ -108,7 +111,6 @@ to notifiers. The palette applies only with `colored=True`; with
 as in earlier releases. Values
 may be Colorama constants or case-insensitive color names: `BLACK`, `RED`,
 `GREEN`, `YELLOW`, `BLUE`, `MAGENTA`, `CYAN`, `WHITE`, or `RESET`.
-
 ```python
 from colorama import Fore
 ColorPalette(
@@ -127,10 +129,43 @@ ColorPalette(
 )
 ```
 
+## Events
+
+Import `Events` from `TwitchChannelPointsMiner.classes.Settings` and select any
+of these values in each provider's `events` list.
+
+| Event | Sent when |
+|---|---|
+| `UPDATE_AVAILABLE` | The update checker finds a newer release. This alert is forced through every configured provider when update checking is enabled. |
+| `DAILY_REPORT` | The scheduled point and Drop activity summary is generated. Requires `daily_report=True`. |
+| `STREAMER_ONLINE` | A tracked streamer goes live. |
+| `STREAMER_OFFLINE` | A tracked streamer goes offline. |
+| `GAIN_FOR_RAID` | Channel points are earned for joining a raid. |
+| `GAIN_FOR_CLAIM` | Channel points are earned from a claimed bonus. |
+| `GAIN_FOR_WATCH` | Channel points are earned for watch time. |
+| `GAIN_FOR_WATCH_STREAK` | Channel points are earned from a watch-streak reward. |
+| `BET_WIN` | A prediction wins and its result is credited. |
+| `BET_LOSE` | A prediction loses. |
+| `BET_REFUND` | A prediction is canceled or refunded. |
+| `BET_FILTERS` | A prediction is skipped because a configured filter does not match. |
+| `BET_GENERAL` | General prediction decisions or status messages are produced. |
+| `BET_FAILED` | A prediction cannot be placed. |
+| `BET_START` | A prediction window opens. |
+| `BONUS_CLAIM` | The periodic channel-points bonus is claimed. |
+| `MOMENT_CLAIM` | A Twitch Moment is claimed. |
+| `JOIN_RAID` | The miner follows a raid to another channel. |
+| `DROP_CLAIM` | A completed Drop reward is claimed. |
+| `DROP_STATUS` | Drop discovery, eligibility, or progress status is reported. This can be verbose. |
+| `DROP_LINK_REQUIRED` | A finished Drop can't be claimed because the campaign's game account isn't linked to Twitch. Sent once per campaign per run (so again after a restart) with the link URL, and once more when its Drops have been claimed. |
+| `CHAT_MENTION` | The configured username is mentioned in joined chat. Chat presence must be enabled. |
+| `GIFTED_SUB` | Someone gifts this account a sub in a joined chat. Chat presence must be enabled. Anonymous gifts are reported as "An Anonymous Gifter". |
+| `CONFIGURATION` | Startup, reload, authentication, or other configuration information requires attention. Critical authentication alerts may be forced through configured providers. |
+| `WATCH_STATUS` | Never sent. It only names the *Watching for points* status line for `ColorPalette`; adding it to a notifier's `events` has no effect. |
+
 ## StreamerSettings
 
 | Key | Type | Default | Description |
-| :-- | :-- | :-- | :-- |
+|---|---|---|---|
 | `make_predictions` | bool | `True` | Participate in channel-point predictions. |
 | `follow_raid` | bool | `True` | Follow eligible raids. |
 | `claim_drops` | bool | `True` | Accumulate Drop watch progress and claim available Drops. |

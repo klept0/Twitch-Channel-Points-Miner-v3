@@ -2,101 +2,8 @@
 
 [Back to the README](../README.md)
 
-This fork publishes its own image, `ghcr.io/klept0/twitch-channel-points-miner`, with every release. It
-includes this fork's additions (see
-[What this fork adds](../README.md#what-this-fork-adds)). Upstream's image,
-`zacharmstrong/twitch-channel-points-miner`, does not.
-
-Docker is the best fit for servers, NAS devices, and unattended operation.
-Choose either Docker Compose or the plain Docker CLI. Both examples persist the
-configuration, authentication cookies, logs, and analytics in the current
-directory.
-
-## Docker Compose
-
-Create an empty working directory containing this `compose.yml`:
-
-```yaml
-services:
-  miner:
-    image: ghcr.io/klept0/twitch-channel-points-miner:latest
-    restart: "no"
-    stop_grace_period: 60s
-    stdin_open: true
-    tty: true
-    environment:
-      - TERM=xterm-256color
-      - TZ=America/Denver
-    volumes:
-      - ./analytics:/usr/src/app/analytics
-      - ./cookies:/usr/src/app/cookies
-      - ./logs:/usr/src/app/logs
-      - ./config:/usr/src/app/config
-    ports:
-      - "54455:54455"
-```
-
-Run `docker compose up`. On the first run, the container creates
-`config/config.py` and exits. Edit that file, replace the example account and
-streamers, disable unused notification providers, and change `restart: "no"` to
-`restart: unless-stopped`. Run `docker compose up` interactively to complete the
-first Twitch sign-in, then use `docker compose up -d` for later starts.
-
-With `"android_login": True`, the miner can't take a pasted sign-in when nobody
-is attached to the container. Set the `TWITCH_ANDROID_LOGIN` environment variable
-to the redirect URL instead (for example `- TWITCH_ANDROID_LOGIN=https://www.twitch.tv/#access_token=...`
-under `environment:`, or `-e TWITCH_ANDROID_LOGIN=...` with `docker run`). It is
-only read when `cookies/<username>-android.pkl` doesn't exist yet. See
-[Android login](settings.md#android-login).
-
-## Docker CLI
-
-Create the persistent directories, then run a temporary container once to seed
-the configuration:
-
-```sh
-mkdir -p analytics cookies logs config
-docker run --rm -it \
-    -e TERM=xterm-256color \
-    -e TZ=America/Denver \
-    -v "$(pwd)/analytics:/usr/src/app/analytics" \
-    -v "$(pwd)/cookies:/usr/src/app/cookies" \
-    -v "$(pwd)/logs:/usr/src/app/logs" \
-    -v "$(pwd)/config:/usr/src/app/config" \
-    -p 54455:54455 \
-    ghcr.io/klept0/twitch-channel-points-miner:latest
-```
-
-The container creates `config/config.py` and exits. Edit that file, replace the
-example account and streamers, and disable unused notification providers. Then
-create the persistent miner container and complete Twitch authentication in its
-interactive terminal:
-
-```sh
-docker run --name twitch-miner -it \
-    --restart unless-stopped \
-    --stop-timeout 60 \
-    -e TERM=xterm-256color \
-    -e TZ=America/Denver \
-    -v "$(pwd)/analytics:/usr/src/app/analytics" \
-    -v "$(pwd)/cookies:/usr/src/app/cookies" \
-    -v "$(pwd)/logs:/usr/src/app/logs" \
-    -v "$(pwd)/config:/usr/src/app/config" \
-    -p 54455:54455 \
-    ghcr.io/klept0/twitch-channel-points-miner:latest
-```
-
-After the initial login, manage the existing container with
-`docker stop twitch-miner` and `docker start twitch-miner`; do not run the
-creation command again. On Windows, replace each `$(pwd)` expression with an
-absolute host path, such as `C:\TwitchMiner\config`.
-
-The sections below cover multiple accounts, Portainer, time zones, and graceful
-shutdown behavior in more detail.
-
 ## Container registry
-
-This fork's images are on GitHub Container Registry as `ghcr.io/klept0/twitch-channel-points-miner` for `linux/amd64` and `linux/arm64`, tagged with each release version and `latest`. See the [package page](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/pkgs/container/twitch-channel-points-miner).
+This fork's images are on GitHub Container Registry as `ghcr.io/klept0/twitch-channel-points-miner` for `linux/amd64` and `linux/arm64`, tagged with each release version and `latest`. See the [package page](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/pkgs/container/twitch-channel-points-miner). Upstream's Docker Hub image, `zacharmstrong/twitch-channel-points-miner`, does not include [this fork's additions](../README.md#what-this-fork-adds).
 
 The ARM64 image can run in compatible 64-bit Android Linux environments where
 the device reports `aarch64` or `arm64-v8a`. Android itself is not a supported
@@ -125,6 +32,44 @@ Persist these directories on the host:
 - `logs`: miner log files
 - `config`: the user-owned configuration
 
+**Example using docker-compose:**
+
+```yml
+version: "3.9"
+
+services:
+  miner:
+    image: ghcr.io/klept0/twitch-channel-points-miner
+    restart: unless-stopped
+    stop_grace_period: 60s
+    stdin_open: true
+    tty: true
+    environment:
+      - TERM=xterm-256color
+      - TZ=America/Denver
+    volumes:
+      - ./analytics:/usr/src/app/analytics
+      - ./cookies:/usr/src/app/cookies
+      - ./logs:/usr/src/app/logs
+      - ./config:/usr/src/app/config
+    ports:
+      - "54455:54455"
+```
+
+**Example with docker run:**
+```sh
+docker run \
+    --restart unless-stopped \
+    --stop-timeout 60 \
+    -e TZ=America/Denver \
+    -v $(pwd)/analytics:/usr/src/app/analytics \
+    -v $(pwd)/cookies:/usr/src/app/cookies \
+    -v $(pwd)/logs:/usr/src/app/logs \
+    -v $(pwd)/config:/usr/src/app/config \
+    -p 54455:54455 \
+    ghcr.io/klept0/twitch-channel-points-miner
+```
+
 Set `TZ` to your [IANA time zone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones),
 for example `America/New_York`, `Europe/London`, or `Asia/Tokyo`. This controls
 the local time used in container logs and timestamps. If `TZ` is omitted, the
@@ -132,6 +77,16 @@ container uses UTC.
 
 `$(pwd)` does not work in Windows Command Prompt. Use absolute host paths there,
 such as `/path/to/cookies:/usr/src/app/cookies`.
+
+On Windows, use absolute host paths. For example, mount
+`C:\Absolute\Path\config` at `/usr/src/app/config`.
+
+With `"android_login": True`, the miner can't take a pasted sign-in when nobody
+is attached to the container. Set the `TWITCH_ANDROID_LOGIN` environment variable
+to the redirect URL instead (for example `- TWITCH_ANDROID_LOGIN=https://www.twitch.tv/#access_token=...`
+under `environment:`, or `-e TWITCH_ANDROID_LOGIN=...` with `docker run`). It is
+only read when `cookies/<username>-android.pkl` doesn't exist yet. See
+[Android login](settings.md#android-login).
 
 ## Graceful Docker shutdowns
 
