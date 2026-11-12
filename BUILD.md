@@ -28,7 +28,7 @@ configured, and Apprise discovers its service plugins at runtime, so
 PyInstaller would need explicit hidden imports for both, and the result is
 untested. When someone configures Apprise, the executable says it is not
 included. The
-[README](README.md#apprise) tells Windows users to use another provider, a
+[notifications guide](docs/notifications.md#apprise) tells Windows users to use another provider, a
 source checkout or Docker instead.
 
 Build the executable:

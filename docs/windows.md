@@ -136,6 +136,11 @@ Developers who want to create the executable from source can use the
 - **Windows says it cannot find the configuration (portable build only):**
   Right-click the downloaded ZIP and use **Extract All...** before running the
   executable.
+- **"Notifications to apprise are failing: The Windows executable does not
+  include Apprise":** The executable cannot send through Apprise. Remove
+  `apprise=Apprise(...)` from `MINER_CONFIG["logger_settings"]` and use a
+  built-in provider such as Discord, Telegram or ntfy, or see
+  [Apprise](notifications.md#apprise) for the setups that include it.
 - **Emoji or symbols look broken:** In `config.py`, use
   `LoggerSettings(emoji=False)` in `MINER_CONFIG["logger_settings"]`. See
   [LoggerSettings](settings.md#loggersettings) for the complete example.

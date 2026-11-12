@@ -53,7 +53,7 @@ These features are in this fork's `master` branch but not in upstream:
 
 | Feature | What it does | Docs |
 | :-- | :-- | :-- |
-| 📨 Apprise notifier | Sends notifications through [Apprise](https://github.com/caronc/apprise), which supports dozens of services. Optional: `pip install apprise`. | [Notifications](docs/notifications.md#apprise) |
+| 📨 Apprise notifier | Sends notifications through [Apprise](https://github.com/caronc/apprise), which supports dozens of services. Source checkouts install it with `pip install -r requirements-optional.txt`; not in the Windows executable. | [Notifications](docs/notifications.md#apprise) |
 | 🧰 Supervisor | An optional cross-platform supervisor for source checkouts: restarts on crashes and on a schedule, applies `git` updates, and sends alerts. | [Supervisor](docs/supervisor.md) |
 | ⚡ Fast Drop claims | Claims Drops as soon as PubSub reports them claimable, including on channels the miner isn't tracking. | |
 | 🛟 Raw-query fallback | Resends a GraphQL query as raw text when Twitch rejects its persisted hash. | |
@@ -111,6 +111,8 @@ cd Twitch-Channel-Points-Miner-v3
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+# Only for the optional Apprise notifier:
+# pip install -r requirements-optional.txt
 mkdir -p config && cp config.example.py config/config.py
 ```
 
