@@ -1,5 +1,22 @@
 # Changelog
 
+## [3.20.0-post.7](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.6...3.20.0-post.7) (2026-11-12)
+
+
+### Bug Fixes
+
+* **badges:** refetch the Drops gist on every badge catalog sync ([cdbc9d6](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/cdbc9d6e5453edb16497b607b43d8b6a68d2602e))
+* **config:** keep a reloaded streamer that another source already tracks ([cdbc9d6](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/cdbc9d6e5453edb16497b607b43d8b6a68d2602e))
+* **config:** keep config.py valid when the dashboard adds a setting ([cdbc9d6](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/cdbc9d6e5453edb16497b607b43d8b6a68d2602e))
+* **config:** load configs saved with a UTF-8 BOM and recover from the newest backup ([cdbc9d6](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/cdbc9d6e5453edb16497b607b43d8b6a68d2602e))
+* **config:** show Email's STARTTLS default so saving the form keeps it on ([cdbc9d6](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/cdbc9d6e5453edb16497b607b43d8b6a68d2602e))
+* **dashboard:** accept non-ASCII analytics usernames and passwords ([cdbc9d6](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/cdbc9d6e5453edb16497b607b43d8b6a68d2602e))
+* **drops:** keep campaigns and retry soon when a campaign refresh fails ([#276](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/276)) ([cdbc9d6](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/cdbc9d6e5453edb16497b607b43d8b6a68d2602e))
+* **drops:** skip inventory drops with a null self while claiming ([cdbc9d6](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/cdbc9d6e5453edb16497b607b43d8b6a68d2602e))
+* **pubsub:** make fallback message timestamps parseable ([cdbc9d6](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/cdbc9d6e5453edb16497b607b43d8b6a68d2602e))
+* **runner:** relaunch with the original -m command after a token restart ([cdbc9d6](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/cdbc9d6e5453edb16497b607b43d8b6a68d2602e))
+* **watch:** retry a missing spade URL instead of aborting minute-watched events ([cdbc9d6](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/cdbc9d6e5453edb16497b607b43d8b6a68d2602e))
+
 ## [3.20.0-post.6](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.5...3.20.0-post.6) (2026-11-12)
 
 
