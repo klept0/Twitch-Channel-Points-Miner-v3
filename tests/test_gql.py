@@ -34,6 +34,7 @@ from TwitchChannelPointsMiner.classes.gql.data.response.PlaybackAccessToken impo
     PlaybackAccessTokenResponse,
 )
 from TwitchChannelPointsMiner.classes.Twitch import Twitch, _drops_dashboard_state
+from TwitchChannelPointsMiner.constants import ANDROID_CLIENT_ID
 from TwitchChannelPointsMiner.utils import AttemptStrategy
 
 
@@ -1412,6 +1413,24 @@ def test_campaign_details_warns_once_when_twitch_withholds_every_campaign(
     warnings = [r for r in caplog.records if "withholds campaign details" in r.message]
     assert len(warnings) == 1
     assert "no details for 5 Drop campaign requests" in warnings[0].message
+    # The TV login points users at the opt-in Android login.
+    assert '"android_login": True' in warnings[0].message
+
+
+def test_campaign_details_withheld_warning_under_android_login_has_no_hint(caplog):
+    twitch = campaign_details_twitch(
+        lambda operation_name, requests: [WITHHELD_CAMPAIGN for _ in requests]
+    )
+    twitch.twitch_login.client_id = ANDROID_CLIENT_ID
+
+    with caplog.at_level(logging.WARNING):
+        for index in range(5):
+            twitch._Twitch__get_campaigns_details([{"id": f"campaign-{index}"}])
+
+    warnings = [r for r in caplog.records if "no details for 5" in r.message]
+    assert len(warnings) == 1
+    assert "from the Android app login too" in warnings[0].message
+    assert "android_login" not in warnings[0].message
 
 
 def test_campaign_details_stale_campaign_does_not_warn_when_others_load(caplog):
@@ -2972,6 +2991,58 @@ def test_category_search_stops_at_drops_directory_result_count(monkeypatch):
         "two",
     ]
     assert len(stream_calls) == 1
+
+
+def test_category_search_finds_drops_channel_beyond_first_directory_page(
+    monkeypatch,
+):
+    # Issue #211: "beyond" is Drops-enabled but only on the directory's
+    # second page; discovery must still be able to pick it.
+    def directory_page(login, has_next_page):
+        return {
+            "data": {
+                "game": {
+                    "id": "game-id",
+                    "streams": {
+                        "edges": [
+                            {
+                                "cursor": f"after-{login}",
+                                "node": {"broadcaster": {"login": login}},
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": has_next_page},
+                    },
+                }
+            }
+        }
+
+    pages = [directory_page("top", True), directory_page("beyond", False)]
+    gql = SimpleNamespace(post_gql_request_raw=lambda operation, request: pages.pop(0))
+    twitch = twitch_with_gql(gql)
+    twitch.twitchdrops_app_campaigns = {}
+    twitch.twitchdrops_app_game_names = {}
+    twitch.category_campaign_eligibility = {}
+
+    def helix_get(endpoint, params):
+        if endpoint == "search/categories":
+            return {"data": [{"id": "game-id", "name": "Game"}]}
+        return {
+            "data": [
+                {"user_login": login, "game_id": "game-id", "viewer_count": viewers}
+                for login, viewers in (("beyond", 9), ("other", 5), ("top", 1))
+            ]
+        }
+
+    monkeypatch.setattr(
+        Twitch, "_Twitch__helix_get", lambda self, *args: helix_get(*args)
+    )
+    monkeypatch.setattr(Twitch, "_Twitch__log_category", lambda *args, **kwargs: None)
+
+    assert twitch.get_live_streamers_for_category("game", limit=300) == [
+        "beyond",
+        "top",
+    ]
+    assert pages == []
 
 
 def _drop_pick_search_twitch(

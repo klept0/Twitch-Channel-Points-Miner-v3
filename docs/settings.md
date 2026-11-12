@@ -31,7 +31,8 @@ and include `Priority.FAVORITE` to reserve watch slots for favorites first.
 By default the miner logs in as Twitch's TV app. Twitch withholds some Drops
 data from that app: the Drops dashboard and campaign details come back empty,
 so the miner works from your inventory, channel listings and a shared campaign
-list instead. Set `"android_login": True` in `MINER_CONFIG` to log in as
+list instead. Set `"android_login": True` in `MINER_CONFIG` (or tick **Log in as
+the Android app** in the dashboard's **Twitch login** box) to log in as
 Twitch's Android app, which gets the full dashboard and campaign details,
 including channel allow-lists. Watching, drop progress, drop claims and
 channel points work the same way under either login.
@@ -53,7 +54,9 @@ service), put the redirect URL in the `TWITCH_ANDROID_LOGIN` environment
 variable instead. The miner checks that the token was issued to the Android app
 and belongs to the configured username, then saves it as
 `cookies/<username>-android.pkl`. The TV login's `cookies/<username>.pkl` is
-kept, so switching back is a matter of turning the setting off.
+kept, so switching back is a matter of turning the setting off. If Twitch later
+rejects the saved token, the miner deletes that cookie file and asks again, so
+replace an old `TWITCH_ANDROID_LOGIN` value with a fresh redirect URL.
 
 > [!WARNING]
 > This token is a full-access login to your Twitch account that does not

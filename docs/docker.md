@@ -46,6 +46,13 @@ streamers, disable unused notification providers, and change `restart: "no"` to
 `restart: unless-stopped`. Run `docker compose up` interactively to complete the
 first Twitch sign-in, then use `docker compose up -d` for later starts.
 
+With `"android_login": True`, the miner can't take a pasted sign-in when nobody
+is attached to the container. Set the `TWITCH_ANDROID_LOGIN` environment variable
+to the redirect URL instead (for example `- TWITCH_ANDROID_LOGIN=https://www.twitch.tv/#access_token=...`
+under `environment:`, or `-e TWITCH_ANDROID_LOGIN=...` with `docker run`). It is
+only read when `cookies/<username>-android.pkl` doesn't exist yet. See
+[Android login](settings.md#android-login).
+
 ## Docker CLI
 
 Create the persistent directories, then run a temporary container once to seed
