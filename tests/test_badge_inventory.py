@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from TwitchChannelPointsMiner.classes.DropAnalytics import DropAnalytics
 from TwitchChannelPointsMiner.classes.Exceptions import CategoryLookupFailedException
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.classes.gql.Errors import RetryError
@@ -1194,7 +1195,7 @@ def test_persisted_captured_drop_completes_fallback_campaign(monkeypatch, tmp_pa
         "ends_at": "2026-08-12T19:59:59Z",
     }
 
-    captured = twitch._Twitch__captured_drop_history()
+    captured = DropAnalytics.captured_history()
 
     assert twitch._Twitch__fallback_reward_was_captured(
         "ATLS Foundation Livery", campaign, "Star Citizen", captured
