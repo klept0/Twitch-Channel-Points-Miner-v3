@@ -1,7 +1,9 @@
+import re
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import pytest
 import requests
 
 from TwitchChannelPointsMiner.classes.Discord import Discord
@@ -359,3 +361,215 @@ def test_discord_reports_a_missing_webhook_url_as_invalid():
             False,
             "The configured Discord URL is invalid.",
         )
+
+
+def test_discord_defaults_are_unchanged_when_embed_is_off():
+    discord = Discord("https://example.com/discord", [Events.CHAT_MENTION])
+
+    with patched_post() as request:
+        discord.send("hello", Events.CHAT_MENTION)
+
+    request.assert_called_once()
+    assert request.call_args.kwargs["data"] == {
+        "content": "`hello`",
+        "username": "Twitch Channel Points Miner",
+        "avatar_url": "https://i.imgur.com/X9fEkhT.png",
+    }
+    assert "json" not in request.call_args.kwargs
+
+
+def test_discord_username_and_avatar_override_in_content_mode():
+    discord = Discord(
+        "https://example.com/discord",
+        [Events.CHAT_MENTION],
+        username="Miner Bot",
+        avatar_url="https://example.com/icon.png",
+    )
+
+    with patched_post() as request:
+        discord.send("hello", Events.CHAT_MENTION)
+
+    data = request.call_args.kwargs["data"]
+    assert data["username"] == "Miner Bot"
+    assert data["avatar_url"] == "https://example.com/icon.png"
+    assert data["content"] == "`hello`"
+
+
+def test_discord_username_and_avatar_override_in_embed_mode():
+    discord = Discord(
+        "https://example.com/discord",
+        [Events.CHAT_MENTION],
+        username="Miner Bot",
+        avatar_url="https://example.com/icon.png",
+        embed=True,
+    )
+
+    with patched_post() as request:
+        discord.send("hello", Events.CHAT_MENTION)
+
+    payload = request.call_args.kwargs["json"]
+    assert payload["username"] == "Miner Bot"
+    assert payload["avatar_url"] == "https://example.com/icon.png"
+
+
+def test_discord_embed_mode_posts_json_without_code_fence():
+    discord = Discord("https://example.com/discord", [Events.DROP_STATUS], embed=True)
+    message = "Campaign: Example\nProgress: 50%"
+
+    with patched_post() as request:
+        assert discord.send(message, Events.DROP_STATUS) == (True, None)
+
+    request.assert_called_once_with(
+        url="https://example.com/discord",
+        params={"wait": "true"},
+        json={
+            "username": "Twitch Channel Points Miner",
+            "avatar_url": "https://i.imgur.com/X9fEkhT.png",
+            "embeds": [{"description": message}],
+        },
+        timeout=(5, 15),
+    )
+    assert "data" not in request.call_args.kwargs
+    assert "content" not in request.call_args.kwargs["json"]
+
+
+def test_discord_embed_title_placeholder_is_replaced_with_event_name():
+    discord = Discord(
+        "https://example.com/discord",
+        [Events.BET_WIN],
+        embed=True,
+        title="Miner: {event}",
+    )
+
+    with patched_post() as request:
+        discord.send("won", Events.BET_WIN)
+
+    embed = request.call_args.kwargs["json"]["embeds"][0]
+    assert embed["title"] == "Miner: BET_WIN"
+
+
+def test_discord_embed_title_and_color_on_split_message():
+    discord = Discord(
+        "https://example.com/discord",
+        [Events.DROP_STATUS],
+        embed=True,
+        title="Miner: {event}",
+        color=0x9146FF,
+    )
+    lines = [f"Campaign {index:04d}: progress {index % 100}%" for index in range(300)]
+    message = "\n".join(lines)
+    assert len(message) > 4096
+
+    with patched_post() as request:
+        assert discord.send(message, Events.DROP_STATUS) == (True, None)
+
+    payloads = [call.kwargs["json"] for call in request.call_args_list]
+    assert len(payloads) > 1
+    embeds = [payload["embeds"][0] for payload in payloads]
+    assert embeds[0]["title"] == "Miner: DROP_STATUS"
+    for embed in embeds[1:]:
+        assert "title" not in embed
+    for embed in embeds:
+        assert embed["color"] == 0x9146FF
+        assert len(embed["description"]) <= 4096
+        assert "```" not in embed["description"]
+    descriptions = [embed["description"] for embed in embeds]
+    assert [line for text in descriptions for line in text.split("\n")] == lines
+
+
+def test_discord_embed_color_applies_to_event():
+    discord = Discord(
+        "https://example.com/discord",
+        [Events.CHAT_MENTION],
+        embed=True,
+        color=0x9146FF,
+    )
+
+    with patched_post() as request:
+        discord.send("hello", Events.CHAT_MENTION)
+
+    embed = request.call_args.kwargs["json"]["embeds"][0]
+    assert embed["color"] == 0x9146FF
+    assert "title" not in embed
+
+
+@pytest.mark.parametrize(
+    ("event", "expected"),
+    [
+        (Events.BET_WIN, 0x2ECC71),
+        (Events.BET_LOSE, 0xE74C3C),
+        (Events.CHAT_MENTION, 0x9146FF),
+    ],
+)
+def test_discord_colors_override_color_per_event_by_member_and_string(event, expected):
+    discord = Discord(
+        "https://example.com/discord",
+        [Events.BET_WIN, Events.BET_LOSE, Events.CHAT_MENTION],
+        embed=True,
+        color=0x9146FF,
+        colors={Events.BET_WIN: 0x2ECC71, "BET_LOSE": 0xE74C3C},
+    )
+
+    with patched_post() as request:
+        discord.send("message", event)
+
+    assert request.call_args.kwargs["json"]["embeds"][0]["color"] == expected
+
+
+def test_discord_colors_are_ignored_when_embed_is_off():
+    discord = Discord(
+        "https://example.com/discord",
+        [Events.BET_WIN],
+        color=0x9146FF,
+        colors={Events.BET_WIN: 0x2ECC71},
+        title="Miner: {event}",
+    )
+
+    with patched_post() as request:
+        discord.send("won", Events.BET_WIN)
+
+    assert request.call_args.kwargs["data"]["content"] == "`won`"
+    assert "json" not in request.call_args.kwargs
+
+
+@pytest.mark.parametrize("bad", [-1, 0x1000000, "red"])
+def test_discord_rejects_invalid_color(bad):
+    with pytest.raises(ValueError, match=re.escape(repr(bad))):
+        Discord("https://example.com/discord", [Events.BET_WIN], color=bad)
+
+
+@pytest.mark.parametrize("bad", [-1, 0x1000000, "red"])
+def test_discord_rejects_invalid_per_event_color(bad):
+    with pytest.raises(ValueError, match=re.escape(repr(bad))):
+        Discord(
+            "https://example.com/discord",
+            [Events.BET_WIN],
+            colors={Events.BET_WIN: bad},
+        )
+
+
+def test_discord_rejects_non_str_title():
+    with pytest.raises(TypeError):
+        Discord("https://example.com/discord", [Events.BET_WIN], title=123)
+
+
+def test_discord_rejects_non_str_username_and_avatar_url():
+    with pytest.raises(TypeError):
+        Discord("https://example.com/discord", [Events.BET_WIN], username=1)
+    with pytest.raises(TypeError):
+        Discord("https://example.com/discord", [Events.BET_WIN], avatar_url=["x"])
+
+
+def test_discord_title_with_literal_braces_does_not_raise():
+    discord = Discord(
+        "https://example.com/discord",
+        [Events.BET_WIN],
+        embed=True,
+        title="{oops} {event} {0}",
+    )
+
+    with patched_post() as request:
+        assert discord.send("won", Events.BET_WIN) == (True, None)
+
+    embed = request.call_args.kwargs["json"]["embeds"][0]
+    assert embed["title"] == "{oops} BET_WIN {0}"

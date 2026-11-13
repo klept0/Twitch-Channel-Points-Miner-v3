@@ -5,6 +5,20 @@ on:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: >-
+          Publish an existing release again (Docker image, Windows files,
+          issue closing) instead of running Release Please. Use it when a
+          run created the release and then failed: a re-run sees no new
+          release and skips publishing.
+        required: false
+        default: ''
+      mark_latest:
+        description: With release_tag, also mark that release as the latest release.
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: write
@@ -15,10 +29,23 @@ jobs:
     name: Create release
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.release_retry_2.outputs.release_created || steps.release_retry_1.outputs.release_created || steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release_retry_2.outputs.tag_name || steps.release_retry_1.outputs.tag_name || steps.release.outputs.tag_name }}
+      release_created: ${{ steps.existing.outputs.release_created || steps.release_retry_2.outputs.release_created || steps.release_retry_1.outputs.release_created || steps.release.outputs.release_created }}
+      tag_name: ${{ steps.existing.outputs.tag_name || steps.release_retry_2.outputs.tag_name || steps.release_retry_1.outputs.tag_name || steps.release.outputs.tag_name }}
     steps:
+      - name: Use the requested existing release
+        if: ${{ inputs.release_tag }}
+        id: existing
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName > /dev/null
+          echo "release_created=true" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
       - name: Run Release Please
+        if: ${{ !inputs.release_tag }}
         id: release
         continue-on-error: true
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
@@ -54,11 +81,11 @@ jobs:
       # -post.N suffix (see AGENTS.md, Fork versioning). They are real
       # releases, so publish them as the latest release, not a pre-release.
       - name: Publish fork release as latest
-        if: (steps.release_retry_2.outputs.release_created || steps.release_retry_1.outputs.release_created || steps.release.outputs.release_created) == 'true'
+        if: (steps.release_retry_2.outputs.release_created || steps.release_retry_1.outputs.release_created || steps.release.outputs.release_created) == 'true' || (steps.existing.outputs.release_created == 'true' && inputs.mark_latest)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release_retry_2.outputs.tag_name || steps.release_retry_1.outputs.tag_name || steps.release.outputs.tag_name }}
+          RELEASE_TAG: ${{ steps.existing.outputs.tag_name || steps.release_retry_2.outputs.tag_name || steps.release_retry_1.outputs.tag_name || steps.release.outputs.tag_name }}
         run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
 
       - name: Checkout link automation
@@ -75,7 +102,7 @@ jobs:
         continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          RELEASE_TAG: ${{ steps.release_retry_2.outputs.tag_name || steps.release_retry_1.outputs.tag_name || steps.release.outputs.tag_name }}
+          RELEASE_TAG: ${{ steps.existing.outputs.tag_name || steps.release_retry_2.outputs.tag_name || steps.release_retry_1.outputs.tag_name || steps.release.outputs.tag_name }}
         with:
           script: |
             const automation = require('./.github/scripts/release-pull-links.js');
@@ -243,11 +270,19 @@ jobs:
           }
           "installer_path=dist/TwitchChannelPointsMiner-$version-Setup.exe" >> $env:GITHUB_OUTPUT
 
+      # gh release upload only adds the files. softprops/action-gh-release
+      # also rewrote the release body from a copy it read earlier, which could
+      # drop the Docker image block publish_docker writes at the same time.
+      # --clobber replaces the files when publishing an existing release again.
       - name: Upload Windows artifacts to release
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
-        with:
-          tag_name: ${{ needs.release_please.outputs.tag_name }}
-          files: |
-            ${{ steps.package.outputs.zip_path }}
-            ${{ steps.installer.outputs.installer_path }}
-          fail_on_unmatched_files: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release_please.outputs.tag_name }}
+          ZIP_PATH: ${{ steps.package.outputs.zip_path }}
+          INSTALLER_PATH: ${{ steps.installer.outputs.installer_path }}
+        run: |
+          gh release upload "$env:RELEASE_TAG" "$env:ZIP_PATH" "$env:INSTALLER_PATH" --clobber --repo "$env:GITHUB_REPOSITORY"
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
