@@ -1088,6 +1088,38 @@ def test_non_ascii_dashboard_credentials_authenticate():
     assert client.get(page, headers=basic("pässwort")).status_code == 401
 
 
+def test_log_endpoint_serves_configured_log_file(tmp_path):
+    log_file = tmp_path / "someone.20260101-120000.log"
+    log_file.write_bytes(b"line one\nline two\n")
+    server = AnalyticsServer(password=None, logs_file=str(log_file))
+
+    response = server.app.test_client().get("/log?lastIndex=0")
+
+    assert response.status_code == 200
+    assert response.get_data() == b"line one\nline two\n"
+    assert response.headers["X-Log-Position"] == str(log_file.stat().st_size)
+
+
+def test_log_endpoint_reports_missing_log_file(tmp_path):
+    server = AnalyticsServer(password=None, logs_file=str(tmp_path / "missing.log"))
+
+    response = server.app.test_client().get("/log?lastIndex=0")
+
+    assert response.status_code == 404
+    assert response.get_data(as_text=True) == "Log file not found."
+    assert "X-Log-Unavailable" not in response.headers
+
+
+def test_log_endpoint_reports_disabled_file_logging():
+    server = AnalyticsServer(password=None, logs_file=None)
+
+    response = server.app.test_client().get("/log?lastIndex=0")
+
+    assert response.status_code == 404
+    assert response.headers["X-Log-Unavailable"] == "disabled"
+    assert "File logging is disabled" in response.get_data(as_text=True)
+
+
 @pytest.mark.parametrize("host_header", ["evil.example", "evil.example:5000"])
 def test_loopback_dashboard_rejects_foreign_host_header(host_header):
     server = AnalyticsServer(password=None)
