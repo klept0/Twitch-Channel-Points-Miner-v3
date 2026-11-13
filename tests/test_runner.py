@@ -435,8 +435,29 @@ ANALYTICS_CONFIG = None
         _load_config(config)
 
 
+def test_restart_process_exits_with_the_supervisor_code(monkeypatch):
+    # Under the Windows background mode the supervising parent restarts the
+    # miner; os.execv would leave an unsupervised copy running on Windows.
+    execs = []
+    monkeypatch.setenv("TCPM_RESTART_EXIT_CODE", "3")
+    monkeypatch.setattr(runner.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(runner.os, "execv", lambda *args: execs.append(args))
+
+    def fake_exit(code):
+        raise SystemExit(code)
+
+    monkeypatch.setattr(runner.os, "_exit", fake_exit)
+
+    with pytest.raises(SystemExit) as exit_info:
+        runner.restart_process()
+
+    assert exit_info.value.code == 3
+    assert execs == []
+
+
 def test_restart_process_relaunches_frozen_executable(monkeypatch):
     calls = []
+    monkeypatch.delenv("TCPM_RESTART_EXIT_CODE", raising=False)
     monkeypatch.setattr(runner.sys, "frozen", True, raising=False)
     monkeypatch.setattr(runner.sys, "executable", "miner.exe")
     monkeypatch.setattr(runner.sys, "argv", ["miner.exe", "--example"])

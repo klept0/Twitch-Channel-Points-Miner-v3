@@ -98,6 +98,41 @@ logs are saved depends on which distribution you installed (see
   by itself after setup; move the entire `TwitchChannelPointsMiner` folder if
   you want it in a different location.
 
+## Run in the background
+
+The Standard installer can run the miner in the background instead of in a
+window. Select **Run in the background when you sign in** on the installer's
+**Select Additional Tasks** page.
+
+- **What it does:** when you sign in to Windows, the miner starts with no
+  window or tray icon. If it crashes, it restarts after 30 seconds, waiting
+  longer (up to 10 minutes) if it keeps crashing. It runs as your Windows
+  user with your normal settings, login session, and logs, and needs no
+  administrator rights.
+- **How it starts:** the installer creates a scheduled task named
+  **Twitch Channel Points Miner (background)** for your account. If Windows
+  doesn't allow that, it adds a startup entry instead. Background mode
+  replaces **Start automatically when you sign in**.
+- **Sign in once first:** background mode can't show Twitch's activation
+  code. Open the desktop app once, enter your Twitch username and sign in,
+  then close it. Until then, background mode exits without mining and says
+  why in `logs\background.log`.
+- **Start and stop it:** use **Start background mining** and **Stop background
+  mining** in the Start menu. Stopping finishes the session cleanly, like
+  closing the window does. While background mining runs, the desktop app
+  won't open; stop background mining first.
+- **Check on it:** open the [analytics dashboard](analytics.md) in your browser
+  if it's enabled, or read the files in the `logs` folder of
+  `%LOCALAPPDATA%\TwitchChannelPointsMiner`:
+  - `background.log`: starts, stops, crashes, and restarts.
+  - `background-worker.log`: the miner's console output.
+  - The miner's own log files, as described in [Logs](logs.md).
+- **Turn it off:** run the installer again and clear the option. Uninstalling
+  also stops background mining and removes the task.
+
+Background mode starts when you sign in, not at boot. To mine while nobody is
+signed in, use a source checkout with the [supervisor](supervisor.md).
+
 ## Update the miner
 
 - **Standard:** download and run the newest `-Setup.exe` from the
