@@ -120,7 +120,7 @@ class DropInventory(object):
         IDs whose claims Twitch accepted.
         """
         inventory = self.inventory
-        progress_by_game = {}
+        progress_by_game: dict[str, list[tuple]] = {}
         finished_ids = set()
         for campaign in inventory.get("dropCampaignsInProgress", []) or []:
             if not isinstance(campaign, dict):

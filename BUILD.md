@@ -31,14 +31,24 @@ included. The
 [notifications guide](docs/notifications.md#apprise) tells Windows users to use another provider, a
 source checkout or Docker instead.
 
-Build the executable:
+Build the executable, passing the build mode:
 
 ```powershell
-.\build_windows.bat
+.\build_windows.bat standard
 ```
 
-The build produces `dist\TwitchChannelPointsMiner.exe`. Copy it to a writable
-directory before running it. Launching it opens a desktop window with a
+| Mode | Produces | Used by |
+| --- | --- | --- |
+| `standard` | `dist\TwitchChannelPointsMiner.exe` | the desktop installer |
+| `portable` (the default) | `dist\TwitchChannelPointsMiner-Portable.exe` | the portable ZIP |
+| `background` | `dist\TwitchChannelPointsMiner-Background.exe` | the background-mining installer |
+
+The `background` build is headless: it leaves out the desktop window and tray
+(pywebview, pystray and Pillow) and only runs background mining and its
+console setup (`--setup`). `--self-test` checks that each build includes, or
+for `background` leaves out, those packages.
+
+Copy the executable to a writable directory before running it. Launching it opens a desktop window with a
 Dashboard tab (the analytics dashboard, embedded) and a Console tab (the
 miner's live log output, including the Twitch sign-in prompt). The
 executable's first-launch configuration and upgrade behavior are documented
@@ -53,7 +63,20 @@ To build the per-user Windows installer after building the executable, install
 ```
 
 The installer is written to
-`dist\TwitchChannelPointsMiner-<version>-Setup.exe`. It installs under the current
+`dist\TwitchChannelPointsMiner-<version>-Setup.exe`. The same script builds
+the other two installers with `/DPayload`:
+
+- `/DPayload=background` bundles `dist\TwitchChannelPointsMiner-Background.exe`
+  and writes `-Background-Setup.exe`.
+- `/DPayload=online` bundles neither program and writes `-Online-Setup.exe`.
+  It downloads the chosen program from the GitHub release, so it also needs
+  the SHA-256 of both release assets: `/DDesktopSha256=<hash>` and
+  `/DBackgroundSha256=<hash>`. `/DReleaseRepo=<owner/repo>` and
+  `/DReleaseTag=<tag>` default to this repository and the version. Inno Setup
+  6.1 or newer is required for the download page.
+
+The desktop installer is described below; the
+[Windows guide](docs/windows.md#installers) compares all three. It installs under the current
 user's local application data, creates a Start menu shortcut, and offers an
 optional desktop shortcut. This keeps the application directory writable for
 the first-launch configuration file and does not require administrator access.
@@ -62,8 +85,9 @@ in a new configuration and to open the configuration guide. Existing
 configurations are never overwritten.
 
 Tagged releases that contain code changes run the same build automatically and
-attach both a versioned portable zip and a
-`TwitchChannelPointsMiner-<version>-Setup.exe` installer to the GitHub release.
+attach a versioned portable zip, the three installers, and the two programs the
+online installer downloads (`-Desktop.exe` and `-Background.exe`) to the
+GitHub release.
 See [the release workflow](.github/workflows/release-please.yml) for the
 automated build definition.
 

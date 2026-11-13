@@ -28,14 +28,21 @@ files = [
     "TwitchChannelPointsMiner/config_editor.py",
     "TwitchChannelPointsMiner/config_migration.py",
     "TwitchChannelPointsMiner/runner.py",
+    "TwitchChannelPointsMiner/logger.py",
+    "TwitchChannelPointsMiner/utils",
+    "TwitchChannelPointsMiner/classes/StreamSelection.py",
+    "TwitchChannelPointsMiner/classes/DropAnalytics.py",
+    "TwitchChannelPointsMiner/classes/DropInventory.py",
     "TwitchChannelPointsMiner/classes/DropClaims.py",
 ]
 # Modules outside `files` are read for their types but not reported on.
 follow_imports = "silent"
+# Also check the bodies of functions that have no annotations yet.
+check_untyped_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 
 # Optional or untyped third-party packages.
 [[tool.mypy.overrides]]
-module = ["apprise", "apprise.*", "colorama", "dateutil", "dateutil.*", "irc", "irc.*", "pytz", "validators", "emoji", "pushbullet", "webview", "pystray", "PIL", "PIL.*"]
+module = ["apprise", "apprise.*", "colorama", "millify", "dateutil", "dateutil.*", "irc", "irc.*", "pytz", "validators", "emoji", "pushbullet", "webview", "pystray", "PIL", "PIL.*"]
 ignore_missing_imports = true

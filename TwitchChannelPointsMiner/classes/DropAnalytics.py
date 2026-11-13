@@ -150,7 +150,7 @@ class DropAnalytics(object):
         with self.mutex:
             self.report_state[report_key] = payload.copy()
 
-        if Settings.enable_analytics is not True:
+        if getattr(Settings, "enable_analytics", False) is not True:
             return
 
         analytics_file = os.path.join(Settings.analytics_path, "drops_by_category.json")
@@ -170,7 +170,7 @@ class DropAnalytics(object):
                     data["drops"] = []
                 data["version"] = ANALYTICS_DATA_VERSION
 
-                compacted = {}
+                compacted: dict[str, dict] = {}
                 for item in data["drops"]:
                     identity_key = self.report_identity_key(item)
                     previous = compacted.get(identity_key)
@@ -269,7 +269,7 @@ class DropAnalytics(object):
 
     @staticmethod
     def captured_history():
-        if Settings.enable_analytics is not True:
+        if getattr(Settings, "enable_analytics", False) is not True:
             return []
 
         analytics_file = os.path.join(Settings.analytics_path, "drops_by_category.json")
@@ -292,7 +292,7 @@ class DropAnalytics(object):
         ]
 
     def reconcile_awarded_game_event_drops(self, inventory):
-        if Settings.enable_analytics is not True:
+        if getattr(Settings, "enable_analytics", False) is not True:
             return 0
 
         if not isinstance(inventory, dict):
@@ -302,7 +302,7 @@ class DropAnalytics(object):
         if not isinstance(rewards, list) or rewards == []:
             return 0
 
-        awarded_by_name = {}
+        awarded_by_name: dict[str, set] = {}
         for reward in rewards:
             if not isinstance(reward, dict):
                 continue

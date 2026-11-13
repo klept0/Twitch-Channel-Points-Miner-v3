@@ -13,6 +13,7 @@ requests and changes no shared state; Twitch passes in its own checks
 import functools
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from collections.abc import Collection, Sequence
 from typing import Any, Callable, Optional
 
 from TwitchChannelPointsMiner.classes.entities.Drop import utc_now
@@ -31,12 +32,12 @@ class DropTierPick(object):
     watched_pick: Optional[int]
     # The tier's online candidates, soonest-expiring first (sticky pick
     # fronted).
-    ordered: list
+    ordered: list[int]
     # Why the previous pick kept the slot, when stickiness or an
     # in-progress drop decided it.
     reason: Optional[str]
     # The tier's candidates that won a watch slot before arbitration.
-    slotted_candidates: list
+    slotted_candidates: list[int]
     # The configured or followed streamer that earns the same campaigns,
     # when it replaced this tier's pick.
     covered_by: Optional[str]
@@ -47,7 +48,7 @@ class StreamSelection(object):
     """What StreamSelector.select() decided for one minute."""
 
     # Indexes into the streamers list, in watch order.
-    watching: list
+    watching: list[int]
     streamer_source: Callable[[int], StreamerSource]
     is_drop_stream: Callable[[int], bool]
     category_expiration: Callable[[int], datetime]
@@ -116,14 +117,14 @@ class StreamSelector(object):
 
     def select(
         self,
-        streamers_snapshot,
-        now,
-        priority,
-        streams_watched,
-        source_priority=None,
-        drop_progress_stall_minutes=10,
-        drop_pick_stickiness_minutes=0,
-        drop_progress_cooldowns=frozenset(),
+        streamers_snapshot: Sequence[Any],
+        now: float,
+        priority: Sequence[Priority],
+        streams_watched: int,
+        source_priority: Optional[Sequence[StreamerSource]] = None,
+        drop_progress_stall_minutes: float = 10,
+        drop_pick_stickiness_minutes: float = 0,
+        drop_progress_cooldowns: Collection[tuple[str, str]] = frozenset(),
     ) -> StreamSelection:
         """Pick the streamers to watch this minute.
 
@@ -172,7 +173,8 @@ class StreamSelector(object):
         # applies to only one. The category safety net below reserves at
         # most one selection for a discovered Drops stream.
         max_watch_amount = streams_watched
-        streamers_watching = set()
+        # Indexes given a watch slot, before the Drops arbitration below.
+        slotted: set[int] = set()
 
         default_source_priority = [
             StreamerSource.STREAMERS,
@@ -197,7 +199,7 @@ class StreamSelector(object):
             return discovery_source(streamers_snapshot[index], source_priority)
 
         def remaining_watch_amount():
-            return max_watch_amount - len(streamers_watching)
+            return max_watch_amount - len(slotted)
 
         category_deadlines = self._category_deadlines
 
@@ -394,15 +396,11 @@ class StreamSelector(object):
                     break
 
                 available_source_indexes = [
-                    index
-                    for index in indexes_by_source[source]
-                    if index not in streamers_watching
+                    index for index in indexes_by_source[source] if index not in slotted
                 ]
 
                 if prior == Priority.ORDER:
-                    streamers_watching.update(
-                        available_source_indexes[: remaining_watch_amount()]
-                    )
+                    slotted.update(available_source_indexes[: remaining_watch_amount()])
 
                 elif prior == Priority.FAVORITE:
                     favorite_indexes = [
@@ -410,9 +408,7 @@ class StreamSelector(object):
                         for index in available_source_indexes
                         if streamers_snapshot[index].settings.favorite
                     ]
-                    streamers_watching.update(
-                        favorite_indexes[: remaining_watch_amount()]
-                    )
+                    slotted.update(favorite_indexes[: remaining_watch_amount()])
 
                 elif prior in [
                     Priority.POINTS_ASCENDING,
@@ -430,7 +426,7 @@ class StreamSelector(object):
                         key=lambda x: x["points"],
                         reverse=(prior == Priority.POINTS_DESCENDING),
                     )
-                    streamers_watching.update(
+                    slotted.update(
                         [item["index"] for item in items][: remaining_watch_amount()]
                     )
 
@@ -439,7 +435,7 @@ class StreamSelector(object):
                         if self._has_pending_watch_streak(
                             streamers_snapshot[index], now
                         ):
-                            streamers_watching.add(index)
+                            slotted.add(index)
                             if remaining_watch_amount() <= 0:
                                 break
 
@@ -450,7 +446,7 @@ class StreamSelector(object):
                             self._drops_condition(streamer) is True
                             or self._previous_pick_still_farming(streamer) is True
                         ):
-                            streamers_watching.add(index)
+                            slotted.add(index)
                             if remaining_watch_amount() <= 0:
                                 break
 
@@ -465,13 +461,13 @@ class StreamSelector(object):
                         key=lambda x: streamers_snapshot[x].total_points_multiplier(),
                         reverse=True,
                     )
-                    streamers_watching.update(
+                    slotted.update(
                         streamers_with_multiplier[: remaining_watch_amount()]
                     )
 
         source_rank = {source: rank for rank, source in enumerate(source_priority)}
         streamers_watching = sorted(
-            streamers_watching,
+            slotted,
             key=lambda index: (
                 source_rank[streamer_source(index)],
                 streamers_index.index(index),
@@ -825,8 +821,12 @@ class StreamSelector(object):
         # covering stream stops covering it.
         if kept_pick_index in conflicting:
             drop_pick_streamer = None
+        # Redundant or conflicting streams come from drop_streams, so
+        # kept_drop_index is set whenever either list is non-empty.
         covering_username = (
-            streamers_snapshot[kept_drop_index].username if redundant else None
+            streamers_snapshot[kept_drop_index].username
+            if redundant and kept_drop_index is not None
+            else None
         )
 
         def _describe(indexes):
@@ -858,7 +858,7 @@ class StreamSelector(object):
                 streamers_snapshot[kept_drop_index].username,
                 tuple(streamers_snapshot[index].username for index in conflicting),
             )
-            if drop_conflict_parts
+            if drop_conflict_parts and kept_drop_index is not None
             else None
         )
 

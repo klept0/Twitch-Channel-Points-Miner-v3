@@ -231,7 +231,7 @@ def _commented_call_defaults(source, line_offsets, call, names):
         return []
     existing = {keyword.arg for keyword in call.keywords}
     missing = [name for name in names if name not in existing]
-    if not missing:
+    if not missing or call.end_lineno is None or call.end_col_offset is None:
         return []
 
     closing_offset = _source_offset(
@@ -245,7 +245,7 @@ def _commented_call_defaults(source, line_offsets, call, names):
         # call is nested in a single-line dictionary.
         return []
 
-    candidates = [*call.args, *call.keywords]
+    candidates: list[ast.expr | ast.keyword] = [*call.args, *call.keywords]
     if candidates:
         first = candidates[0]
         indent = source[
@@ -346,6 +346,7 @@ class _LineOffsets(list):
     """
 
     __slots__ = ("lines",)
+    lines: list[str]
 
 
 def _line_start_offsets(source):
@@ -437,9 +438,13 @@ def _closing_line_insertion(source, line_offsets, node, lines):
     )
     closing_line_start = line_offsets[node.end_lineno - 1]
     closing_prefix = source[closing_line_start:closing_offset]
+    candidates: list[ast.expr | ast.keyword]
+    final_candidates: list[ast.expr | ast.keyword]
     if isinstance(node, ast.Dict):
-        candidates = node.keys
-        final_candidates = node.values
+        # Callers only edit dicts whose keys are all literal strings
+        # (_dict_has_literal_string_keys), so no key is None here.
+        candidates = [key for key in node.keys if key is not None]
+        final_candidates = list(node.values)
     else:
         candidates = [
             *getattr(node, "args", []),
