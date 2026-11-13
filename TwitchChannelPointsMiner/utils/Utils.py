@@ -335,7 +335,7 @@ def _split_lines(
     message: str, limit: int, length_func: Callable[[str], int]
 ) -> list[str]:
     pieces = []
-    current = []
+    current: list[str] = []
     current_length = 0
     for line in message.split("\n"):
         for segment, segment_length in _wrap_line(line, limit, length_func):

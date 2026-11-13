@@ -11,6 +11,95 @@ import stat
 import tempfile
 import threading
 from pathlib import Path
+from typing import Any, Literal, TypedDict, get_args
+
+
+class NotificationSchema(TypedDict):
+    """The dashboard form for one notifier."""
+
+    # Settings shown with their values.
+    fields: tuple[str, ...]
+    # Settings the dashboard can set but never reads back.
+    secrets: tuple[str, ...]
+
+
+class NotificationState(TypedDict):
+    """One notifier as config.py configures it, for the dashboard."""
+
+    enabled: bool
+    fields: dict[str, Any]
+    # Whether each secret is set. The secret itself is never sent.
+    secrets: dict[str, bool]
+    # Whether every argument the test button needs is configured.
+    test_available: bool
+
+
+class StreamerEntry(TypedDict):
+    username: str
+    # The effective settings: the defaults overlaid with this streamer's own.
+    settings: dict[str, Any]
+
+
+# Values typed Any below are read from config.py as written and are not
+# validated until the miner starts.
+class CategoryOptions(TypedDict):
+    limit: Any
+    sort: Any
+    refresh_interval_hours: Any
+    drops_enabled: Any
+
+
+class LoggingOptions(TypedDict):
+    console_level: Any
+    file_level: Any
+    daily_report: Any
+    daily_report_time: Any
+
+
+class UpdateOptions(TypedDict):
+    enabled: Any
+    interval_hours: Any
+    startup_only: bool
+
+
+class LoginOptions(TypedDict):
+    android: bool
+
+
+class WebConfig(TypedDict):
+    """What read_managed_web_config() returns to the dashboard's Config tab."""
+
+    streamers: list[StreamerEntry]
+    streamer_defaults: dict[str, Any]
+    categories: list[str]
+    category: CategoryOptions
+    # Whether each streamer source is enabled, by dashboard name.
+    sources: dict[str, bool]
+    source_order: list[str]
+    category_drops_override_streamers: bool
+    logging: LoggingOptions
+    updates: UpdateOptions
+    login: LoginOptions
+    notifications: dict[str, NotificationState]
+    notification_schemas: dict[str, "NotificationSchema"]
+    notification_event_options: list[str]
+
+
+# The "action" values update_managed_web_config() accepts.
+WebConfigAction = Literal[
+    "add",
+    "remove",
+    "reorder_categories",
+    "reorder_streamers",
+    "update_streamer",
+    "update_category",
+    "update_sources",
+    "update_logging",
+    "update_updates",
+    "update_login",
+    "update_notification",
+]
+WEB_CONFIG_ACTIONS = frozenset(get_args(WebConfigAction))
 
 CONFIG_FILE_MUTEX = threading.Lock()
 STREAMER_RE = re.compile(r"^[A-Za-z0-9_]{1,25}$")
@@ -47,7 +136,7 @@ SOURCE_ENUM_BY_NAME = {
     "wildcard_categories": "WILDCARD_CATEGORIES",
 }
 DEFAULT_SOURCE_ORDER = tuple(SOURCE_ENUM_BY_NAME)
-NOTIFICATION_SCHEMAS = {
+NOTIFICATION_SCHEMAS: dict[str, NotificationSchema] = {
     "telegram": {
         "fields": ("chat_id", "message_thread_id", "disable_notification", "events"),
         "secrets": ("token",),
@@ -254,7 +343,7 @@ def read_config_literal(source, assignment_name, key=None, default=None):
         return default
 
 
-def _base_web_config(config_path):
+def _base_web_config(config_path: str | os.PathLike[str]) -> WebConfig:
     from TwitchChannelPointsMiner.classes.Settings import Events
 
     source = Path(config_path).read_text(encoding="utf-8")
@@ -279,7 +368,7 @@ def _base_web_config(config_path):
         and update_interval.get("__args__") == ["inf"]
     )
 
-    streamers = []
+    streamers: list[StreamerEntry] = []
     for node in streamer_nodes.elts:
         username = _streamer_value(node)
         if username is None:
@@ -325,7 +414,7 @@ def _base_web_config(config_path):
         if member in ui_name_by_enum
     ]
     source_order += [name for name in DEFAULT_SOURCE_ORDER if name not in source_order]
-    notifications = {}
+    notifications: dict[str, NotificationState] = {}
     for provider, schema in NOTIFICATION_SCHEMAS.items():
         configured = logger_settings.get(provider)
         if not isinstance(configured, dict):
@@ -344,22 +433,18 @@ def _base_web_config(config_path):
         }
         for name, default in NOTIFICATION_FIELD_DEFAULTS.get(provider, {}).items():
             fields.setdefault(name, default)
-        notifications[provider] = {
-            "enabled": bool(configured),
-            "fields": fields,
-            "secrets": {name: bool(configured.get(name)) for name in schema["secrets"]},
-        }
+        secrets = {name: bool(configured.get(name)) for name in schema["secrets"]}
         available = {
             name for name, value in fields.items() if value not in (None, "", [])
         }
-        available.update(
-            name
-            for name, present in notifications[provider]["secrets"].items()
-            if present
-        )
-        notifications[provider]["test_available"] = bool(configured) and (
-            NOTIFICATION_REQUIRED[provider].issubset(available)
-        )
+        available.update(name for name, present in secrets.items() if present)
+        notifications[provider] = {
+            "enabled": bool(configured),
+            "fields": fields,
+            "secrets": secrets,
+            "test_available": bool(configured)
+            and NOTIFICATION_REQUIRED[provider].issubset(available),
+        }
 
     return {
         "streamers": streamers,
@@ -421,7 +506,12 @@ def load_web_overrides(config_path):
     return data
 
 
-def read_managed_web_config(config_path):
+def _schema_secrets(provider: str) -> tuple[str, ...]:
+    schema = NOTIFICATION_SCHEMAS.get(provider)
+    return schema["secrets"] if schema is not None else ()
+
+
+def read_managed_web_config(config_path: str | os.PathLike[str]) -> WebConfig:
     return _base_web_config(config_path)
 
 
@@ -489,7 +579,7 @@ def migrate_web_config(config_path):
             {
                 name: value
                 for name, value in update.get("secrets", {}).items()
-                if name in NOTIFICATION_SCHEMAS.get(provider, {}).get("secrets", ())
+                if name in _schema_secrets(provider)
             }
         )
         if "enabled" in update:
@@ -1199,7 +1289,8 @@ def _ensure_config_import(config_path, statement):
     )
 
 
-def _validate_streamer_settings(settings):
+def _validate_streamer_settings(settings: object) -> dict[str, Any]:
+    """Return the per-streamer settings, or raise ConfigEditError."""
     if not isinstance(settings, dict) or set(settings) - STREAMER_SETTING_NAMES:
         raise ConfigEditError("Unsupported per-streamer setting.")
     for name in STREAMER_SETTING_NAMES - {"chat", "points_limit"}:
@@ -1214,6 +1305,7 @@ def _validate_streamer_settings(settings):
         or points_limit < 0
     ):
         raise ConfigEditError("Points limit must be a non-negative integer or null.")
+    return settings
 
 
 def _valid_managed_category(value):
@@ -1251,13 +1343,18 @@ def _runtime_notification_events(values):
     return normalized
 
 
-def update_managed_web_config(config_path, payload):
+def update_managed_web_config(
+    config_path: str | os.PathLike[str], payload: object
+) -> WebConfig:
+    """Apply one dashboard change; ``payload`` is the request's JSON body."""
     with CONFIG_FILE_MUTEX:
         migrate_web_config(config_path)
         return _update_managed_web_config(config_path, payload)
 
 
-def _update_managed_web_config(config_path, payload):
+def _update_managed_web_config(
+    config_path: str | os.PathLike[str], payload: object
+) -> WebConfig:
     if not isinstance(payload, dict):
         raise ConfigEditError("The configuration update must be a JSON object.")
     action = payload.get("action")
@@ -1277,7 +1374,10 @@ def _update_managed_web_config(config_path, payload):
             valid = bool(value) and kind in {"streamers", "categories"}
         if not valid:
             raise ConfigEditError("Invalid streamer username or category value.")
-        items = list(current[kind])
+        # Streamer entries or category names, depending on kind.
+        items: list[Any] = list(
+            current["streamers"] if kind == "streamers" else current["categories"]
+        )
         names = [item["username"] if kind == "streamers" else item for item in items]
         matching = {name.lower() for name in names}
         if action == "add":
@@ -1329,8 +1429,7 @@ def _update_managed_web_config(config_path, payload):
         _write_streamers(config_path, reordered)
     elif action == "update_streamer":
         username = str(payload.get("username", "")).lower().strip()
-        settings = payload.get("settings")
-        _validate_streamer_settings(settings)
+        settings = _validate_streamer_settings(payload.get("settings"))
         streamers = list(current["streamers"])
         for streamer in streamers:
             if streamer["username"].lower() == username:
@@ -1488,6 +1587,8 @@ def _update_managed_web_config(config_path, payload):
             )
     elif action == "update_notification":
         provider = payload.get("provider")
+        if not isinstance(provider, str):
+            provider = ""
         schema = NOTIFICATION_SCHEMAS.get(provider)
         values = payload.get("values") or {}
         if schema is None or not isinstance(values, dict):
