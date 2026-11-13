@@ -140,6 +140,8 @@ class RecordingSession(FakeSession):
         ),
         ("", BADGES_GIST_URL),
         ("ftp://example.com/twitch-badges.json", BADGES_GIST_URL),
+        ("https:/example.com/twitch-badges.json", BADGES_GIST_URL),
+        ("https://[invalid", BADGES_GIST_URL),
     ],
 )
 def test_fetch_badges_uses_the_url_override(tmp_path, monkeypatch, value, expected):
