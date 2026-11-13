@@ -279,5 +279,5 @@ def test_claim_fallback_preserves_unlinked_account_guard(monkeypatch):
     assert twitch.claim_drop(drop, campaign_link=link) is False
     assert twitch.claim_drop(drop, campaign_link=link) is False
     assert twitch.unlinked_drop_report()[0]["url"] == link["url"]
-    assert "instance-1" not in twitch.accepted_drop_claims
+    assert "instance-1" not in twitch.drop_claims.accepted_drop_claims
     assert len(calls) == 2

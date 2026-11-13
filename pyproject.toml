@@ -28,6 +28,7 @@ files = [
     "TwitchChannelPointsMiner/config_editor.py",
     "TwitchChannelPointsMiner/config_migration.py",
     "TwitchChannelPointsMiner/runner.py",
+    "TwitchChannelPointsMiner/classes/DropClaims.py",
 ]
 # Modules outside `files` are read for their types but not reported on.
 follow_imports = "silent"
