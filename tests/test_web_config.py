@@ -2242,3 +2242,38 @@ def test_removing_streamers_keeps_the_list_valid(
     )
 
     assert _usernames(config) == expected
+
+
+def test_web_config_actions_match_the_actions_handled():
+    # WebConfigAction documents the update payloads; keep it in step with
+    # the actions _update_managed_web_config() handles.
+    import ast
+    import inspect
+
+    source = inspect.getsource(config_editor._update_managed_web_config)
+    handled = set()
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Compare)
+            and isinstance(node.left, ast.Name)
+            and node.left.id == "action"
+        ):
+            for comparator in node.comparators:
+                for constant in ast.walk(comparator):
+                    if isinstance(constant, ast.Constant) and isinstance(
+                        constant.value, str
+                    ):
+                        handled.add(constant.value)
+
+    assert handled == config_editor.WEB_CONFIG_ACTIONS
+
+
+def test_read_managed_web_config_returns_every_web_config_key(tmp_path):
+    config = tmp_path / "config.py"
+    write_config(config)
+
+    data = config_editor.read_managed_web_config(config)
+
+    assert set(data) == set(config_editor.WebConfig.__annotations__)
+    for provider, state in data["notifications"].items():
+        assert set(state) == set(config_editor.NotificationState.__annotations__)

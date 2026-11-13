@@ -130,7 +130,7 @@ CI runs the same check on every pull request. The one-off Black reformat is list
 You can use the pre-commit hook, which runs the same Black version.
 
 ### Type checking
-A few modules are type-checked with [mypy](https://mypy-lang.org/), pinned in `requirements-dev.txt`. Only the modules listed under `[tool.mypy]` in `pyproject.toml` are checked; the list grows as more of the code is annotated.
+A few modules are type-checked with [mypy](https://mypy-lang.org/), pinned in `requirements-dev.txt`. Only the modules listed under `[tool.mypy]` in `pyproject.toml` are checked, including the bodies of functions without annotations (`check_untyped_defs`); the list grows as more of the code is annotated.
 ```
 pip install -r requirements-dev.txt
 python -m mypy

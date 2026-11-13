@@ -83,6 +83,8 @@ def _retry_after_seconds(error):
         return None
     headers = getattr(response, "headers", None) or {}
     for hint in (headers.get("Retry-After"), _body_retry_after(response)):
+        if hint is None:
+            continue
         try:
             return max(0.0, float(hint))
         except (TypeError, ValueError):

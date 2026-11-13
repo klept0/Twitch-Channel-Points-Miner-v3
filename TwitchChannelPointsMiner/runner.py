@@ -59,14 +59,14 @@ def _load_config(path):
     if path.with_name(".converted-from-run-py").is_file():
         from TwitchChannelPointsMiner.classes.Settings import StreamerSource
 
-        module.StreamerSource = StreamerSource
+        setattr(module, "StreamerSource", StreamerSource)
     try:
         exec(compile(source, str(path), "exec"), module.__dict__)
     except NameError as error:
         traceback = error.__traceback__
-        while traceback.tb_next is not None:
+        while traceback is not None and traceback.tb_next is not None:
             traceback = traceback.tb_next
-        if traceback.tb_frame.f_code.co_filename != str(path):
+        if traceback is None or traceback.tb_frame.f_code.co_filename != str(path):
             raise
         name = getattr(error, "name", None) or "A name"
         raise RuntimeError(
