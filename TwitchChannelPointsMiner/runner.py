@@ -278,6 +278,16 @@ def run_config(config, path, on_miner_ready=None):
 
 def restart_process():
     """Replace the current process, preserving frozen executable arguments."""
+    # A supervising parent (the Windows background mode, see
+    # windows_launcher.py) restarts the miner itself. On Windows os.execv
+    # starts a separate process and ends this one, so the parent would see a
+    # normal exit while an unsupervised copy kept running. Exit with the code
+    # the parent asked for instead.
+    restart_exit_code = os.environ.get("TCPM_RESTART_EXIT_CODE", "").strip()
+    if restart_exit_code.isdigit():
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(int(restart_exit_code))
     if getattr(sys, "frozen", False):
         return os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
     # sys.orig_argv keeps "-m TwitchChannelPointsMiner.runner" (the Docker

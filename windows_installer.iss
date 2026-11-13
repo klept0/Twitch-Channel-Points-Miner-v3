@@ -33,6 +33,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 Name: "startuponlogin"; Description: "Start automatically when you sign in"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+; Background mode runs the miner with no window, started at sign-in by a
+; per-user scheduled task (or a Run entry when the task can't be created),
+; and restarts it after a crash. See windows_launcher.py's --background and
+; docs/windows.md. It replaces the sign-in shortcut above when both are chosen.
+Name: "backgroundmode"; Description: "Run in the background when you sign in (no window, restarts after a crash; replaces the option above)"; GroupDescription: "Background mode:"; Flags: unchecked
 Name: "configure"; Description: "Prefill a new configuration"; GroupDescription: "First run:"; Flags: checkedonce
 Name: "enableanalytics"; Description: "Enable the analytics dashboard (recommended)"; GroupDescription: "First run:"; Flags: checkedonce
 
@@ -45,16 +50,37 @@ Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 ; uninstalling never touches user data.
 Source: "config.example.py"; DestDir: "{localappdata}\TwitchChannelPointsMiner\config"; DestName: "config.py"; Flags: onlyifdoesntexist; AfterInstall: CustomizeStarterConfig
 
+[InstallDelete]
+; Inno Setup doesn't remove a shortcut when its task is deselected, so drop
+; the sign-in shortcut an earlier install made once background mode replaces it.
+Type: files; Name: "{userstartup}\{#MyAppName}.lnk"; Tasks: backgroundmode
+
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 ; Launches straight to the tray (--start-minimized) rather than popping the
 ; window on every sign-in - see windows_launcher.py's _START_MINIMIZED_FLAG.
-Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--start-minimized"; WorkingDir: "{app}"; Tasks: startuponlogin
+Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--start-minimized"; WorkingDir: "{app}"; Tasks: startuponlogin and not backgroundmode
+Name: "{group}\Start background mining"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; WorkingDir: "{app}"; Tasks: backgroundmode
+Name: "{group}\Stop background mining"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--stop-background"; WorkingDir: "{app}"; Tasks: backgroundmode
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+; Register background mode, or remove a registration left by an earlier
+; install when the task is no longer selected.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--register-background"; WorkingDir: "{app}"; StatusMsg: "Setting up background mode..."; Flags: runhidden waituntilterminated; Tasks: backgroundmode
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--unregister-background"; WorkingDir: "{app}"; StatusMsg: "Removing background mode..."; Flags: runhidden waituntilterminated; Tasks: not backgroundmode; Check: BackgroundModeRegistered
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent; Tasks: not backgroundmode
+; Background mode can't show Twitch's activation code, so the first sign-in
+; happens in the desktop app. The background exe exits without mining until
+; a username and a Twitch login exist.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; Description: "Start background mining now"; WorkingDir: "{app}"; Flags: nowait postinstall runhidden; Tasks: backgroundmode
+Filename: "{app}\{#MyAppExeName}"; Description: "Open the desktop app to sign in to Twitch (needed once before background mining can run)"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent unchecked; Tasks: backgroundmode
 Filename: "https://github.com/klept0/Twitch-Channel-Points-Miner-v3/blob/master/docs/configuration.md"; Description: "Open the configuration guide"; Flags: shellexec postinstall skipifsilent unchecked
+
+[UninstallRun]
+; Stop background mining and remove its scheduled task or Run entry before
+; the files go.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--unregister-background"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "UnregisterBackground"; Check: BackgroundModeRegistered
 
 [Code]
 const
@@ -231,6 +257,35 @@ begin
 
   ConfigBytes := AnsiString(ConfigText);
   SaveStringToFile(ConfigPath, ConfigBytes, False);
+end;
+
+// True when an earlier install registered background mode: its scheduled
+// task exists or its Run entry is set. Only exes that know the background
+// flags create either, so it's safe to run them with those flags.
+function BackgroundModeRegistered(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := RegValueExists(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run',
+    'TwitchChannelPointsMinerBackground');
+  if not Result then
+    Result := Exec(ExpandConstant('{sys}\schtasks.exe'),
+      '/Query /TN "Twitch Channel Points Miner (background)"', '', SW_HIDE,
+      ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
+// Stop a running background miner before files are replaced, so an upgrade
+// doesn't have to force-close it mid-write.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+  ExePath: String;
+begin
+  Result := '';
+  ExePath := ExpandConstant('{app}\{#MyAppExeName}');
+  if FileExists(ExePath) and BackgroundModeRegistered() then
+    Exec(ExePath, '--stop-background', ExpandConstant('{app}'), SW_HIDE,
+      ewWaitUntilTerminated, ResultCode);
 end;
 
 procedure InitializeWizard;

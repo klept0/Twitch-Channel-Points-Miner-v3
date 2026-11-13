@@ -3818,3 +3818,590 @@ def test_launch_shell_passes_hidden_kwarg_to_create_window(tmp_path, monkeypatch
     )
 
     assert fake_webview.create_window_kwargs["hidden"] is True
+
+
+# --- Background mode -------------------------------------------------------
+
+
+class _FakeClock:
+    """Stands in for the module's clock and sleep. Sleeping advances the
+    clock, and an optional hook runs on each sleep so a test can simulate a
+    stop request arriving mid-wait."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+        self.on_sleep = None
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
+        if self.on_sleep is not None:
+            self.on_sleep(len(self.sleeps))
+
+
+def _patch_clock(monkeypatch):
+    clock = _FakeClock()
+    monkeypatch.setattr(windows_launcher, "_background_clock", clock.monotonic)
+    monkeypatch.setattr(windows_launcher, "_background_sleep", clock.sleep)
+    return clock
+
+
+class _FakeWorkerProcess:
+    def __init__(self, code, runtime, clock):
+        self._code = code
+        self._runtime = runtime
+        self._clock = clock
+
+    def wait(self):
+        # A worker that ran for `runtime` seconds before exiting with `code`.
+        self._clock.now += self._runtime
+        return self._code
+
+
+def _patch_popen(monkeypatch, runs, clock):
+    """`runs` is a list of (exit_code, runtime_seconds), one per launch.
+    Returns the list of (argv, kwargs) the supervisor passed to Popen."""
+    launched = []
+
+    def fake_popen(argv, **kwargs):
+        launched.append((argv, kwargs))
+        code, runtime = runs.pop(0)
+        return _FakeWorkerProcess(code, runtime, clock)
+
+    monkeypatch.setattr(windows_launcher.subprocess, "Popen", fake_popen)
+    return launched
+
+
+def _write_background_config(tmp_path, username="streamer", android_login=False):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.py").write_text(
+        "MINER_CONFIG = {"
+        f"'username': {username!r}, 'android_login': {android_login!r}"
+        "}\n",
+        encoding="utf-8",
+    )
+
+
+def _ready_background_env(tmp_path, monkeypatch, username="streamer"):
+    """Point the background entry points at tmp_path with a configured,
+    signed-in account and every OS-level piece stubbed out."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(windows_launcher, "application_directory", lambda: tmp_path)
+    monkeypatch.setattr(windows_launcher, "_is_standard_build", lambda: False)
+    monkeypatch.setattr(windows_launcher, "_acquire_background_mutex", lambda: True)
+    monkeypatch.setattr(windows_launcher, "_kill_worker_with_parent", lambda _p: None)
+    _write_background_config(tmp_path, username=username)
+    cookies = tmp_path / "cookies"
+    cookies.mkdir(exist_ok=True)
+    (cookies / f"{username}.pkl").write_text("cookie", encoding="utf-8")
+    return _patch_clock(monkeypatch)
+
+
+def _background_log_text(tmp_path):
+    return (tmp_path / "logs" / "background.log").read_text(encoding="utf-8")
+
+
+def _logged_delays(tmp_path):
+    return [
+        int(part.split(" seconds")[0])
+        for part in _background_log_text(tmp_path).split("restarting in ")[1:]
+    ]
+
+
+def test_background_main_returns_zero_without_worker_when_username_missing(
+    tmp_path, monkeypatch
+):
+    clock = _ready_background_env(tmp_path, monkeypatch)
+    _write_background_config(tmp_path, username=windows_launcher._PLACEHOLDER_USERNAME)
+    launched = _patch_popen(monkeypatch, [], clock)
+
+    assert windows_launcher._background_main() == 0
+
+    assert launched == []
+    assert "No Twitch username is configured" in _background_log_text(tmp_path)
+
+
+def test_background_main_returns_zero_without_worker_when_not_signed_in(
+    tmp_path, monkeypatch
+):
+    clock = _ready_background_env(tmp_path, monkeypatch)
+    (tmp_path / "cookies" / "streamer.pkl").unlink()
+    launched = _patch_popen(monkeypatch, [], clock)
+
+    assert windows_launcher._background_main() == 0
+
+    assert launched == []
+    assert "Not signed in to Twitch yet" in _background_log_text(tmp_path)
+
+
+def test_background_main_accepts_the_android_cookie_for_android_login(
+    tmp_path, monkeypatch
+):
+    clock = _ready_background_env(tmp_path, monkeypatch)
+    (tmp_path / "cookies" / "streamer.pkl").unlink()
+    _write_background_config(tmp_path, android_login=True)
+    (tmp_path / "cookies" / "streamer-android.pkl").write_text("c", encoding="utf-8")
+    launched = _patch_popen(monkeypatch, [(0, 0)], clock)
+
+    assert windows_launcher._background_main() == 0
+
+    assert len(launched) == 1
+
+
+def test_background_main_returns_zero_when_another_instance_holds_the_lock(
+    tmp_path, monkeypatch
+):
+    clock = _ready_background_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        windows_launcher, "_acquire_single_instance_lock", lambda: False
+    )
+    launched = _patch_popen(monkeypatch, [], clock)
+
+    assert windows_launcher._background_main() == 0
+
+    assert launched == []
+    assert "already running" in _background_log_text(tmp_path)
+
+
+def test_background_main_removes_a_stale_stop_file_once_the_lock_is_held(
+    tmp_path, monkeypatch
+):
+    clock = _ready_background_env(tmp_path, monkeypatch)
+    stop_file = tmp_path / windows_launcher._BACKGROUND_STOP_FILE
+    stop_file.write_text("", encoding="utf-8")
+    _patch_popen(monkeypatch, [(0, 0)], clock)
+
+    assert windows_launcher._background_main() == 0
+
+    assert not stop_file.exists()
+
+
+def test_background_supervisor_restarts_on_restart_code_and_stops_on_zero(
+    tmp_path, monkeypatch
+):
+    clock = _ready_background_env(tmp_path, monkeypatch)
+    launched = _patch_popen(monkeypatch, [(1, 0), (3, 0), (0, 0)], clock)
+
+    assert windows_launcher._background_main() == 0
+
+    assert len(launched) == 3
+    # Only the crash waits: 30 one-second polls, nothing after the restart
+    # request (3) or the clean stop (0).
+    assert sum(clock.sleeps) == 30
+    argv, kwargs = launched[0]
+    assert argv[1] == windows_launcher._BACKGROUND_WORKER_FLAG
+    assert kwargs["env"]["TCPM_RESTART_EXIT_CODE"] == "3"
+    assert kwargs["cwd"] == str(tmp_path)
+    assert _logged_delays(tmp_path) == [30]
+
+
+def test_background_supervisor_doubles_backoff_for_consecutive_crashes_and_caps_it(
+    tmp_path, monkeypatch
+):
+    clock = _ready_background_env(tmp_path, monkeypatch)
+    _patch_popen(monkeypatch, [(1, 0)] * 7 + [(0, 0)], clock)
+
+    assert windows_launcher._background_main() == 0
+
+    delays = _logged_delays(tmp_path)
+    assert delays == [30, 60, 120, 240, 480, 600, 600]
+    assert sum(clock.sleeps) == sum(delays)
+
+
+def test_background_supervisor_resets_backoff_after_a_long_healthy_run(
+    tmp_path, monkeypatch
+):
+    clock = _ready_background_env(tmp_path, monkeypatch)
+    _patch_popen(monkeypatch, [(1, 0), (1, 0), (1, 3600), (1, 0), (0, 0)], clock)
+
+    assert windows_launcher._background_main() == 0
+
+    # The 3600 s run ends the streak, so its own restart delay starts at 30.
+    assert _logged_delays(tmp_path) == [30, 60, 30, 60]
+
+
+def test_background_supervisor_ends_during_backoff_when_stop_file_appears(
+    tmp_path, monkeypatch
+):
+    clock = _ready_background_env(tmp_path, monkeypatch)
+    stop_file = tmp_path / windows_launcher._BACKGROUND_STOP_FILE
+
+    def request_stop_mid_backoff(sleep_count):
+        if sleep_count == 3:
+            stop_file.write_text("", encoding="utf-8")
+
+    clock.on_sleep = request_stop_mid_backoff
+    launched = _patch_popen(monkeypatch, [(1, 0)], clock)
+
+    assert windows_launcher._background_main() == 0
+
+    assert len(launched) == 1
+    assert not stop_file.exists()
+    assert "Stop requested during the restart delay" in _background_log_text(tmp_path)
+
+
+def test_background_worker_stops_gracefully_when_stop_file_exists(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(windows_launcher, "application_directory", lambda: tmp_path)
+    monkeypatch.setattr(windows_launcher, "_is_standard_build", lambda: False)
+    monkeypatch.setattr(windows_launcher, "_redirect_worker_output", lambda _p: None)
+    monkeypatch.setattr(windows_launcher, "_headless_worker", False)
+    _write_background_config(tmp_path)
+    stop_file = tmp_path / windows_launcher._BACKGROUND_STOP_FILE
+    stop_file.write_text("", encoding="utf-8")
+
+    release = threading.Event()
+    monkeypatch.setattr(
+        windows_launcher, "_run_miner_thread", lambda argv, on_ready: release.wait(5)
+    )
+    stopped = []
+
+    def fake_stop(handle):
+        stopped.append(handle)
+        release.set()
+
+    monkeypatch.setattr(windows_launcher, "_stop_miner_gracefully", fake_stop)
+
+    assert windows_launcher._background_worker_main() == 0
+
+    assert len(stopped) == 1
+    assert not stop_file.exists()
+
+
+def test_background_worker_returns_one_when_the_miner_ends_on_its_own(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(windows_launcher, "application_directory", lambda: tmp_path)
+    monkeypatch.setattr(windows_launcher, "_is_standard_build", lambda: False)
+    monkeypatch.setattr(windows_launcher, "_redirect_worker_output", lambda _p: None)
+    monkeypatch.setattr(windows_launcher, "_headless_worker", False)
+    _write_background_config(tmp_path)
+    monkeypatch.setattr(
+        windows_launcher, "_run_miner_thread", lambda argv, on_ready: None
+    )
+    stopped = []
+    monkeypatch.setattr(
+        windows_launcher,
+        "_stop_miner_gracefully",
+        lambda handle: stopped.append(handle),
+    )
+
+    assert windows_launcher._background_worker_main() == 1
+
+    assert stopped == []
+
+
+def test_background_worker_passes_runner_arguments_without_launcher_flags(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(windows_launcher, "application_directory", lambda: tmp_path)
+    monkeypatch.setattr(windows_launcher, "_is_standard_build", lambda: False)
+    monkeypatch.setattr(windows_launcher, "_redirect_worker_output", lambda _p: None)
+    monkeypatch.setattr(windows_launcher, "_headless_worker", False)
+    _write_background_config(tmp_path)
+    seen = []
+    monkeypatch.setattr(
+        windows_launcher,
+        "_run_miner_thread",
+        lambda argv, on_ready: seen.append(list(argv)),
+    )
+
+    assert windows_launcher._background_worker_main() == 1
+
+    assert seen == [
+        [
+            "--config-dir",
+            str(tmp_path / "config"),
+            "--legacy-runner",
+            str(tmp_path / "run.py"),
+        ]
+    ]
+
+
+def _stop_test_env(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(windows_launcher, "application_directory", lambda: tmp_path)
+    monkeypatch.setattr(windows_launcher, "_is_standard_build", lambda: False)
+    return _patch_clock(monkeypatch)
+
+
+def test_stop_background_returns_zero_and_clears_stop_file_when_not_running(
+    tmp_path, monkeypatch
+):
+    _stop_test_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(windows_launcher, "_background_instance_running", lambda: False)
+    stop_file = tmp_path / windows_launcher._BACKGROUND_STOP_FILE
+    stop_file.write_text("", encoding="utf-8")
+
+    assert windows_launcher._stop_background_main() == 0
+
+    assert not stop_file.exists()
+    assert "Background mining is not running." in _background_log_text(tmp_path)
+
+
+def test_stop_background_waits_until_the_supervisor_exits(tmp_path, monkeypatch):
+    clock = _stop_test_env(tmp_path, monkeypatch)
+    running = {"value": True}
+    monkeypatch.setattr(
+        windows_launcher, "_background_instance_running", lambda: running["value"]
+    )
+    stop_file = tmp_path / windows_launcher._BACKGROUND_STOP_FILE
+
+    def supervisor_exits_after_two_polls(sleep_count):
+        assert stop_file.exists()  # the request is in place while we wait
+        if sleep_count == 2:
+            running["value"] = False
+
+    clock.on_sleep = supervisor_exits_after_two_polls
+
+    assert windows_launcher._stop_background_main() == 0
+
+    assert "Background mining stopped." in _background_log_text(tmp_path)
+
+
+def test_stop_background_returns_one_when_the_supervisor_never_stops(
+    tmp_path, monkeypatch
+):
+    _stop_test_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(windows_launcher, "_background_instance_running", lambda: True)
+
+    assert windows_launcher._stop_background_main() == 1
+
+    assert "did not stop" in _background_log_text(tmp_path)
+
+
+def _fake_run_result(returncode=0, stderr="", stdout=""):
+    return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def test_register_background_task_uses_a_scheduled_task_when_powershell_succeeds(
+    monkeypatch,
+):
+    calls = []
+    monkeypatch.setattr(
+        windows_launcher.subprocess,
+        "run",
+        lambda argv, **kwargs: calls.append((argv, kwargs)) or _fake_run_result(0),
+    )
+    fake_winreg, store = _fake_winreg_module()
+    monkeypatch.setitem(windows_launcher.sys.modules, "winreg", fake_winreg)
+    autostart = []
+    monkeypatch.setattr(
+        windows_launcher,
+        "set_autostart_enabled",
+        lambda enabled: autostart.append(enabled) or (True, "Saved."),
+    )
+
+    ok, mechanism, message = windows_launcher.register_background_task()
+
+    assert (ok, mechanism) == (True, "task")
+    assert "scheduled task" in message
+    assert autostart == [False]
+    assert calls[0][0][0] == "powershell.exe"
+    assert calls[0][1]["timeout"] == 60
+    assert windows_launcher._BACKGROUND_RUN_VALUE_NAME not in store.get(
+        windows_launcher._AUTOSTART_KEY_PATH, {}
+    )
+
+
+def test_register_background_task_quotes_an_exe_path_with_an_apostrophe(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        windows_launcher.subprocess,
+        "run",
+        lambda argv, **kwargs: calls.append((argv, kwargs)) or _fake_run_result(0),
+    )
+    fake_winreg, _store = _fake_winreg_module()
+    monkeypatch.setitem(windows_launcher.sys.modules, "winreg", fake_winreg)
+    monkeypatch.setattr(
+        windows_launcher, "set_autostart_enabled", lambda enabled: (True, "Saved.")
+    )
+    monkeypatch.setattr(
+        windows_launcher.sys, "executable", r"C:\Program Files\O'Brien\app.exe"
+    )
+
+    windows_launcher.register_background_task()
+
+    script = calls[0][0][-1]
+    assert r"-Execute 'C:\Program Files\O''Brien\app.exe'" in script
+    assert f"-TaskName '{windows_launcher._BACKGROUND_TASK_NAME}'" in script
+    assert "-Argument '--background'" in script
+
+
+def test_register_background_task_falls_back_to_run_key_when_powershell_fails(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        windows_launcher.subprocess,
+        "run",
+        lambda argv, **kwargs: _fake_run_result(
+            1, stderr="Access denied\nmore detail\n"
+        ),
+    )
+    fake_winreg, store = _fake_winreg_module()
+    monkeypatch.setitem(windows_launcher.sys.modules, "winreg", fake_winreg)
+    autostart = []
+    monkeypatch.setattr(
+        windows_launcher,
+        "set_autostart_enabled",
+        lambda enabled: autostart.append(enabled) or (True, "Saved."),
+    )
+
+    ok, mechanism, message = windows_launcher.register_background_task()
+
+    assert (ok, mechanism) == (True, "run-key")
+    assert "Access denied" in message
+    assert "more detail" not in message
+    assert autostart == [False]
+    assert (
+        store[windows_launcher._AUTOSTART_KEY_PATH][
+            windows_launcher._BACKGROUND_RUN_VALUE_NAME
+        ]
+        == f'"{windows_launcher.sys.executable}" --background'
+    )
+
+
+def test_register_background_task_fails_when_both_mechanisms_fail(monkeypatch):
+    def failing_run(argv, **kwargs):
+        raise OSError("powershell missing")
+
+    monkeypatch.setattr(windows_launcher.subprocess, "run", failing_run)
+    fake_winreg, _store = _fake_winreg_module()
+
+    def failing_set(*_args):
+        raise OSError("registry locked")
+
+    fake_winreg.SetValueEx = failing_set
+    monkeypatch.setitem(windows_launcher.sys.modules, "winreg", fake_winreg)
+
+    ok, mechanism, message = windows_launcher.register_background_task()
+
+    assert ok is False
+    assert mechanism is None
+    assert "powershell missing" in message
+    assert "registry locked" in message
+
+
+def test_unregister_background_task_deletes_task_and_run_value(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(windows_launcher, "_background_instance_running", lambda: False)
+    calls = []
+    monkeypatch.setattr(
+        windows_launcher.subprocess,
+        "run",
+        lambda argv, **kwargs: calls.append(argv) or _fake_run_result(0),
+    )
+    fake_winreg, store = _fake_winreg_module()
+    store[windows_launcher._AUTOSTART_KEY_PATH] = {
+        windows_launcher._BACKGROUND_RUN_VALUE_NAME: "x"
+    }
+    monkeypatch.setitem(windows_launcher.sys.modules, "winreg", fake_winreg)
+
+    ok, _message = windows_launcher.unregister_background_task()
+
+    assert ok is True
+    assert calls == [
+        ["schtasks.exe", "/Delete", "/TN", windows_launcher._BACKGROUND_TASK_NAME, "/F"]
+    ]
+    assert (
+        windows_launcher._BACKGROUND_RUN_VALUE_NAME
+        not in store[windows_launcher._AUTOSTART_KEY_PATH]
+    )
+
+
+def test_unregister_background_task_tolerates_missing_task_and_run_value(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(windows_launcher, "_background_instance_running", lambda: False)
+    monkeypatch.setattr(
+        windows_launcher.subprocess,
+        "run",
+        lambda argv, **kwargs: _fake_run_result(
+            1, stderr="ERROR: The system cannot find the file specified."
+        ),
+    )
+    fake_winreg, _store = _fake_winreg_module()
+    monkeypatch.setitem(windows_launcher.sys.modules, "winreg", fake_winreg)
+
+    ok, _message = windows_launcher.unregister_background_task()
+
+    assert ok is True
+
+
+def test_main_shows_background_message_and_skips_window_ping_when_background_runs(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        windows_launcher, "_acquire_single_instance_lock", lambda: False
+    )
+    monkeypatch.setattr(windows_launcher, "_background_instance_running", lambda: True)
+    monkeypatch.setattr(windows_launcher.sys, "argv", ["TwitchChannelPointsMiner.exe"])
+    notified = []
+    shown = []
+    monkeypatch.setattr(
+        windows_launcher, "_notify_running_instance", lambda: notified.append(True)
+    )
+    monkeypatch.setattr(
+        windows_launcher, "_message_box", lambda text, title, flags: shown.append(text)
+    )
+
+    assert windows_launcher.main() == 0
+
+    assert notified == []
+    assert len(shown) == 1
+    assert "already running in the background (background mode)" in shown[0]
+    assert "Stop background mining" in shown[0]
+
+
+@pytest.mark.parametrize(
+    ("flag", "target"),
+    [
+        ("--background", "_background_main"),
+        ("--background-worker", "_background_worker_main"),
+        ("--stop-background", "_stop_background_main"),
+        ("--register-background", "_register_background_main"),
+        ("--unregister-background", "_unregister_background_main"),
+    ],
+)
+def test_main_dispatches_background_flags_without_forwarding_them(
+    monkeypatch, flag, target
+):
+    called = []
+    monkeypatch.setattr(windows_launcher, target, lambda: called.append(target) or 42)
+    monkeypatch.setattr(windows_launcher.sys, "argv", ["exe", flag])
+    monkeypatch.setattr(
+        windows_launcher,
+        "runner_main",
+        lambda argv, **kwargs: pytest.fail("background flags must not reach runner"),
+    )
+
+    assert windows_launcher.main() == 42
+    assert called == [target]
+
+
+def test_frozen_background_worker_exits_without_waiting_for_threads(monkeypatch):
+    # A leftover non-daemon miner thread would otherwise keep the worker
+    # process alive, and the supervisor waits on it before restarting.
+    exits = []
+    monkeypatch.setattr(windows_launcher.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(windows_launcher.os, "_exit", exits.append)
+
+    windows_launcher._end_background_worker(1)
+
+    assert exits == [1]
+
+
+def test_background_worker_code_is_returned_outside_a_frozen_build(monkeypatch):
+    monkeypatch.delattr(windows_launcher.sys, "frozen", raising=False)
+
+    assert windows_launcher._end_background_worker(3) == 3
