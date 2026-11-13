@@ -18,6 +18,7 @@ from TwitchChannelPointsMiner.TwitchChannelPointsMiner import (
     _normalize_streams_watched,
     _normalize_watch_status_interval_minutes,
 )
+from TwitchChannelPointsMiner.classes.DropInventory import DropInventory
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.classes.Settings import (
     Events,
@@ -799,10 +800,9 @@ def test_minute_watcher_stops_fully_captured_unclaimed_category_stream(monkeypat
             }
         ],
     }
-    seed_twitch = Twitch.__new__(Twitch)
-    completed = seed_twitch._Twitch__completed_campaign_ids_from_inventory(
+    completed = DropInventory(
         {"dropCampaignsInProgress": [inventory_campaign]}
-    )
+    ).completed_campaign_ids()
 
     posted = _run_one_watch_iteration(
         monkeypatch,

@@ -8,6 +8,7 @@ from threading import Event
 import pytest
 import requests
 
+from TwitchChannelPointsMiner.classes.DropInventory import DropInventory
 from TwitchChannelPointsMiner.classes.ClientSession import ClientSession
 from TwitchChannelPointsMiner.classes.Exceptions import (
     CategoryLookupFailedException,
@@ -3507,7 +3508,6 @@ def test_category_search_rejects_user_created_drops_lookalike(monkeypatch):
 
 
 def test_campaign_inventory_merge_keeps_new_drop_and_existing_progress():
-    twitch = twitch_with_gql(SimpleNamespace())
     fresh = {
         "id": "campaign-1",
         "timeBasedDrops": [
@@ -3525,7 +3525,7 @@ def test_campaign_inventory_merge_keeps_new_drop_and_existing_progress():
         ],
     }
 
-    merged = twitch._Twitch__merge_campaign_inventory_progress(fresh, inventory)
+    merged = DropInventory.merge_campaign_progress(fresh, inventory)
 
     assert [drop["id"] for drop in merged["timeBasedDrops"]] == [
         "old-drop",
@@ -3536,7 +3536,6 @@ def test_campaign_inventory_merge_keeps_new_drop_and_existing_progress():
 
 
 def test_campaign_inventory_merge_keeps_inventory_channel_allowlist():
-    twitch = twitch_with_gql(SimpleNamespace())
     fresh = {
         "id": "campaign-1",
         "allow": {"channels": None},
@@ -3553,7 +3552,7 @@ def test_campaign_inventory_merge_keeps_inventory_channel_allowlist():
         "timeBasedDrops": [],
     }
 
-    merged = twitch._Twitch__merge_campaign_inventory_progress(fresh, inventory)
+    merged = DropInventory.merge_campaign_progress(fresh, inventory)
 
     assert merged["allow"] == inventory["allow"]
     assert fresh["allow"] == {"channels": None}
