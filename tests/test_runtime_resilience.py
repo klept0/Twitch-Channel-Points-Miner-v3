@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from dateutil import parser
 
+from TwitchChannelPointsMiner.classes.DropAnalytics import DropAnalytics
 from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer
 from TwitchChannelPointsMiner.classes.gql.Errors import RetryError
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
@@ -175,7 +176,7 @@ def _sync_campaigns_harness(monkeypatch, dashboards, details, passes):
     monkeypatch.setattr(twitch_module.time, "time", lambda: clock["now"])
     monkeypatch.setattr(Twitch, "claim_all_drops_from_inventory", lambda self: None)
     monkeypatch.setattr(
-        Twitch, "_Twitch__save_drop_snapshot_from_dict", lambda self, *a, **k: None
+        DropAnalytics, "save_snapshot_from_dict", lambda self, *a, **k: None
     )
 
     def fake_sync(self, campaigns):

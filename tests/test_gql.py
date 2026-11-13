@@ -8,6 +8,7 @@ from threading import Event
 import pytest
 import requests
 
+from TwitchChannelPointsMiner.classes.DropAnalytics import DropAnalytics
 from TwitchChannelPointsMiner.classes.ClientSession import ClientSession
 from TwitchChannelPointsMiner.classes.Exceptions import (
     CategoryLookupFailedException,
@@ -1116,12 +1117,10 @@ def test_claim_drop_uses_typed_claim_status(monkeypatch):
     twitch = twitch_with_gql(gql)
     twitch.completed_drop_campaigns = set()
     saved = []
+    monkeypatch.setattr(DropAnalytics, "variant_entries", lambda self, drop: [{}])
     monkeypatch.setattr(
-        Twitch, "_Twitch__drop_variant_entries_from_drop", lambda self, drop: [{}]
-    )
-    monkeypatch.setattr(
-        Twitch,
-        "_Twitch__save_drop_claim_analytics",
+        DropAnalytics,
+        "save_drop",
         lambda self, drop, **kwargs: saved.append(drop.id),
     )
 
