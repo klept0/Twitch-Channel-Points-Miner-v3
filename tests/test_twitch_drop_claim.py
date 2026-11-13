@@ -4,12 +4,13 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta
-from threading import Lock
 from types import SimpleNamespace
 
 import pytest
 
+import TwitchChannelPointsMiner.classes.DropClaims as drop_claims_module
 from TwitchChannelPointsMiner.classes.DropAnalytics import DropAnalytics
+from TwitchChannelPointsMiner.classes.DropClaims import DropClaims
 from TwitchChannelPointsMiner.classes.DropInventory import DropInventory
 from TwitchChannelPointsMiner.classes.entities.Campaign import Campaign
 from TwitchChannelPointsMiner.classes.gql.Errors import RetryError
@@ -1013,7 +1014,7 @@ def test_skipped_accepted_claim_logs_at_debug(monkeypatch, caplog):
 
 
 def test_accepted_claim_retries_quietly_after_backoff(monkeypatch, caplog):
-    from TwitchChannelPointsMiner.classes.Twitch import ACCEPTED_CLAIM_RETRY_SECONDS
+    from TwitchChannelPointsMiner.classes.DropClaims import ACCEPTED_CLAIM_RETRY_SECONDS
 
     twitch, drop, requests, saved, now = claim_recording_twitch(monkeypatch)
 
@@ -1024,12 +1025,12 @@ def test_accepted_claim_retries_quietly_after_backoff(monkeypatch, caplog):
 
     assert requests == ["instance-1", "instance-1"]
     assert len(saved) == 1
-    assert twitch.accepted_drop_claims == {"instance-1": now[0]}
+    assert twitch.drop_claims.accepted_drop_claims == {"instance-1": now[0]}
     assert len(drop_claim_events(caplog)) == 1
 
 
 def test_failed_retry_waits_a_full_interval(monkeypatch):
-    from TwitchChannelPointsMiner.classes.Twitch import ACCEPTED_CLAIM_RETRY_SECONDS
+    from TwitchChannelPointsMiner.classes.DropClaims import ACCEPTED_CLAIM_RETRY_SECONDS
 
     twitch, drop, requests, _saved, now = claim_recording_twitch(
         monkeypatch, statuses=("ELIGIBLE_FOR_ALL", "UNEXPECTED")
@@ -1146,8 +1147,8 @@ def test_unlinked_claim_warns_once_without_claim_event(monkeypatch, caplog):
         "Earned Drops stay claimable for a while after linking."
         == warnings[1].getMessage()
     )
-    assert twitch.accepted_drop_claims == {}
-    assert set(twitch.unlinked_drop_claims) == {
+    assert twitch.drop_claims.accepted_drop_claims == {}
+    assert set(twitch.drop_claims.unlinked_drop_claims) == {
         "instance-1",
         "instance-2",
         "instance-3",
@@ -1156,7 +1157,7 @@ def test_unlinked_claim_warns_once_without_claim_event(monkeypatch, caplog):
 
 
 def test_unlinked_claim_is_not_retried_hourly(monkeypatch, caplog):
-    from TwitchChannelPointsMiner.classes.Twitch import (
+    from TwitchChannelPointsMiner.classes.DropClaims import (
         ACCEPTED_CLAIM_RETRY_SECONDS,
         UNLINKED_CLAIM_RETRY_SECONDS,
     )
@@ -1176,7 +1177,7 @@ def test_unlinked_claim_is_not_retried_hourly(monkeypatch, caplog):
 
     assert requests == ["instance-1", "instance-1"]
     assert len(link_required_events(caplog)) == 1
-    assert twitch.unlinked_drop_claims["instance-1"]["stamp"] == now[0]
+    assert twitch.drop_claims.unlinked_drop_claims["instance-1"]["stamp"] == now[0]
 
 
 def test_unlinked_claim_retries_when_inventory_reports_linked(monkeypatch, caplog):
@@ -1213,8 +1214,8 @@ def test_unlinked_claim_retries_when_inventory_reports_linked(monkeypatch, caplo
         'Drops from "Hunt" have been claimed; no longer waiting on a game '
         "account link" == events[1].getMessage()
     )
-    assert twitch.unlinked_drop_claims == {}
-    assert twitch.accepted_drop_claims == {"instance-1": now[0]}
+    assert twitch.drop_claims.unlinked_drop_claims == {}
+    assert twitch.drop_claims.accepted_drop_claims == {"instance-1": now[0]}
 
 
 def test_linked_campaign_logs_once_after_its_last_drop(monkeypatch, caplog):
@@ -1239,13 +1240,13 @@ def test_linked_campaign_logs_once_after_its_last_drop(monkeypatch, caplog):
     events = link_required_events(caplog)
     assert [record.levelno for record in events] == [logging.WARNING, logging.INFO]
     assert len(drop_claim_events(caplog)) == 2
-    assert twitch.unlinked_drop_claims == {}
+    assert twitch.drop_claims.unlinked_drop_claims == {}
 
 
 def test_linked_inventory_with_unlinked_response_does_not_rewarn(monkeypatch, caplog):
     # The inventory flag flipping to connected is an edge, not a level: the
     # sync pass runs every minute, so a stale flag must not claim each time.
-    from TwitchChannelPointsMiner.classes.Twitch import UNLINKED_CLAIM_RETRY_SECONDS
+    from TwitchChannelPointsMiner.classes.DropClaims import UNLINKED_CLAIM_RETRY_SECONDS
 
     twitch, drop, requests, _saved, now = claim_recording_twitch(
         monkeypatch, statuses=(("ELIGIBLE_FOR_ALL", False),)
@@ -1266,13 +1267,13 @@ def test_linked_inventory_with_unlinked_response_does_not_rewarn(monkeypatch, ca
 
     assert requests == ["instance-1"] * 3
     assert len(link_required_events(caplog)) == 1
-    assert twitch.unlinked_drop_claims["instance-1"]["connected"] is True
+    assert twitch.drop_claims.unlinked_drop_claims["instance-1"]["connected"] is True
 
 
 def test_fallback_retry_that_succeeds_claims_once(monkeypatch, caplog):
     # A response without the flag counts as connected, as before this flag
     # was read.
-    from TwitchChannelPointsMiner.classes.Twitch import UNLINKED_CLAIM_RETRY_SECONDS
+    from TwitchChannelPointsMiner.classes.DropClaims import UNLINKED_CLAIM_RETRY_SECONDS
 
     twitch, drop, requests, saved, now = claim_recording_twitch(
         monkeypatch, statuses=(("ELIGIBLE_FOR_ALL", False), "ELIGIBLE_FOR_ALL")
@@ -1289,7 +1290,7 @@ def test_fallback_retry_that_succeeds_claims_once(monkeypatch, caplog):
     assert requests == ["instance-1", "instance-1"]
     assert len(saved) == 1
     assert len(drop_claim_events(caplog)) == 1
-    assert twitch.unlinked_drop_claims == {}
+    assert twitch.drop_claims.unlinked_drop_claims == {}
 
 
 def test_already_claimed_with_unlinked_flag_is_treated_as_claimed(monkeypatch, caplog):
@@ -1302,12 +1303,12 @@ def test_already_claimed_with_unlinked_flag_is_treated_as_claimed(monkeypatch, c
         assert twitch.claim_drop(drop, campaign_link=unlinked_campaign_link()) is True
 
     assert link_required_events(caplog) == []
-    assert twitch.unlinked_drop_claims == {}
-    assert "instance-1" in twitch.accepted_drop_claims
+    assert twitch.drop_claims.unlinked_drop_claims == {}
+    assert "instance-1" in twitch.drop_claims.accepted_drop_claims
 
 
 def test_unlinked_retry_of_accepted_claim_unaccepts_it(monkeypatch, caplog):
-    from TwitchChannelPointsMiner.classes.Twitch import ACCEPTED_CLAIM_RETRY_SECONDS
+    from TwitchChannelPointsMiner.classes.DropClaims import ACCEPTED_CLAIM_RETRY_SECONDS
 
     twitch, drop, _requests, _saved, now = claim_recording_twitch(
         monkeypatch, statuses=("ELIGIBLE_FOR_ALL", ("ELIGIBLE_FOR_ALL", False))
@@ -1319,8 +1320,8 @@ def test_unlinked_retry_of_accepted_claim_unaccepts_it(monkeypatch, caplog):
         now[0] += ACCEPTED_CLAIM_RETRY_SECONDS
         assert twitch.claim_drop(drop, campaign_link=link) is False
 
-    assert twitch.accepted_drop_claims == {}
-    assert "instance-1" in twitch.unlinked_drop_claims
+    assert twitch.drop_claims.accepted_drop_claims == {}
+    assert "instance-1" in twitch.drop_claims.unlinked_drop_claims
     assert len(link_required_events(caplog)) == 1
 
 
@@ -1365,7 +1366,10 @@ def test_sync_drops_path_keeps_unlinked_drop_unclaimed(monkeypatch, caplog):
         'Can\'t claim Drops from "Example Campaign" (Example Game): link your '
         "game account at https://example.test/link." in warnings[0].getMessage()
     )
-    assert twitch.unlinked_drop_claims["instance-1"]["campaign_id"] == "campaign-1"
+    assert (
+        twitch.drop_claims.unlinked_drop_claims["instance-1"]["campaign_id"]
+        == "campaign-1"
+    )
     assert "drop-1" in twitch._Twitch__finished_drop_ids()
 
 
@@ -1393,7 +1397,7 @@ def test_claim_all_drops_skips_completion_log_for_unlinked_campaign(
 
     assert "final inventory drop claimed" not in caplog.text
     assert len(link_required_events(caplog)) == 1
-    entry = twitch.unlinked_drop_claims["instance-1"]
+    entry = twitch.drop_claims.unlinked_drop_claims["instance-1"]
     assert entry == {
         "stamp": entry["stamp"],
         "campaign_id": "campaign-1",
@@ -1407,7 +1411,7 @@ def test_claim_all_drops_skips_completion_log_for_unlinked_campaign(
 
 
 def test_unlinked_entries_age_out(monkeypatch):
-    from TwitchChannelPointsMiner.classes.Twitch import UNLINKED_CLAIM_RETRY_SECONDS
+    from TwitchChannelPointsMiner.classes.DropClaims import UNLINKED_CLAIM_RETRY_SECONDS
 
     twitch, drop, _requests, _saved, now = claim_recording_twitch(
         monkeypatch, statuses=(("ELIGIBLE_FOR_ALL", False),)
@@ -1423,7 +1427,7 @@ def test_unlinked_entries_age_out(monkeypatch):
     twitch.claim_drop(
         other, campaign_link={"campaign_id": "campaign-9", "connected": False}
     )
-    assert set(twitch.unlinked_drop_claims) == {"instance-9"}
+    assert set(twitch.drop_claims.unlinked_drop_claims) == {"instance-9"}
 
 
 def test_unlinked_drop_report_groups_drops_by_campaign(monkeypatch):
@@ -1497,7 +1501,7 @@ def test_unlinked_drop_report_without_campaign_id_keeps_drops_apart(monkeypatch)
 def test_sync_pass_forgets_unlinked_claims_the_inventory_stopped_listing(
     monkeypatch, caplog
 ):
-    from TwitchChannelPointsMiner.classes.Twitch import (
+    from TwitchChannelPointsMiner.classes.DropClaims import (
         UNLINKED_CLAIM_MISSING_GRACE_SECONDS,
     )
 
@@ -1645,7 +1649,7 @@ def test_sync_pass_keeps_unlinked_claims_through_short_inventories(monkeypatch):
 
 
 def test_inventory_linked_but_claim_unlinked_retries_hourly(monkeypatch):
-    from TwitchChannelPointsMiner.classes.Twitch import (
+    from TwitchChannelPointsMiner.classes.DropClaims import (
         ACCEPTED_CLAIM_RETRY_SECONDS,
         UNLINKED_CLAIM_RETRY_SECONDS,
     )
@@ -1693,7 +1697,7 @@ def test_claim_all_drops_paces_only_sent_requests(monkeypatch):
 
 
 def test_sync_pass_keeps_listed_unlinked_claim_from_aging_out(monkeypatch):
-    from TwitchChannelPointsMiner.classes.Twitch import UNLINKED_CLAIM_RETRY_SECONDS
+    from TwitchChannelPointsMiner.classes.DropClaims import UNLINKED_CLAIM_RETRY_SECONDS
 
     twitch, drop, requests, _saved, now = claim_recording_twitch(
         monkeypatch, statuses=(("ELIGIBLE_FOR_ALL", False),)
@@ -1730,7 +1734,7 @@ def test_sync_pass_keeps_listed_unlinked_claim_from_aging_out(monkeypatch):
 
 def test_inventory_cache_skips_drops_with_accepted_claims(monkeypatch):
     twitch = bare_twitch(monkeypatch)
-    twitch.accepted_drop_claims = {"instance-1": 1_000.0}
+    twitch.drop_claims.accepted_drop_claims = {"instance-1": 1_000.0}
     data = campaign_data()
     data["timeBasedDrops"][0]["self"] = {
         "hasPreconditionsMet": True,
@@ -1953,7 +1957,7 @@ def test_channel_check_rules_out_fully_watched_unconfirmed_drop(monkeypatch):
 
 def test_channel_check_rules_out_drop_with_accepted_claim(monkeypatch):
     twitch, campaign = _finished_daily_campaign_twitch(monkeypatch)
-    twitch.accepted_drop_claims = {"instance-daily": 1_000.0}
+    twitch.drop_claims.accepted_drop_claims = {"instance-daily": 1_000.0}
     twitch._Twitch__cache_drop_inventory_progress(_daily_drop_inventory(campaign, 170))
 
     twitch._Twitch__get_campaign_ids_from_streamer(category_streamer())
@@ -1994,7 +1998,7 @@ def test_accepted_drop_stays_finished_across_inventory_syncs(monkeypatch):
     )
     monkeypatch.setattr(DropAnalytics, "save_drop", lambda *args, **kwargs: None)
     assert twitch.claim_drop(drop) is True
-    twitch.accepted_drop_claims = {}
+    twitch.drop_claims.accepted_drop_claims = {}
     twitch._Twitch__cache_drop_inventory_progress(_daily_drop_inventory(campaign, 170))
 
     twitch._Twitch__get_campaign_ids_from_streamer(category_streamer())
@@ -2744,7 +2748,7 @@ def test_fully_captured_unclaimed_campaign_stops_category_watch(monkeypatch):
 
 def _account_wide_evaluation(monkeypatch, accepted_drop_ids):
     twitch = bare_twitch(monkeypatch)
-    twitch.accepted_drop_ids = frozenset(accepted_drop_ids)
+    twitch.drop_claims.accepted_drop_ids = frozenset(accepted_drop_ids)
     inventory_campaign = campaign_data()
     inventory_campaign["timeBasedDrops"][0]["self"] = {
         "hasPreconditionsMet": True,
@@ -3424,21 +3428,24 @@ class _SyncThread:
         self._target(*self._args)
 
 
+def bare_drop_claims():
+    """A DropClaims whose collaborators all fail the test if used."""
+
+    def unused(*args, **kwargs):
+        pytest.fail("not expected in this test")
+
+    return DropClaims(unused, unused, unused, unused, unused)
+
+
 def prompt_claim_twitch(monkeypatch, claimed):
-    twitch_module = importlib.import_module("TwitchChannelPointsMiner.classes.Twitch")
-    monkeypatch.setattr(twitch_module, "Thread", _SyncThread)
+    """An object whose drop_claims runs prompt claims synchronously."""
+    monkeypatch.setattr(drop_claims_module, "Thread", _SyncThread)
     monkeypatch.setattr(
-        Twitch,
+        DropClaims,
         "claim_all_drops_from_inventory",
         lambda self: claimed.append("claim"),
     )
-    twitch = object.__new__(Twitch)
-    twitch.campaign_lookup_unavailable = False
-    twitch.unevaluated_category_slugs = set()
-    twitch.prompt_claim_lock = Lock()
-    twitch.prompt_claim_pass_lock = Lock()
-    twitch.prompt_claim_last = {}
-    return twitch
+    return SimpleNamespace(drop_claims=bare_drop_claims())
 
 
 def test_prompt_claim_debounce_is_per_drop(monkeypatch):
@@ -3452,14 +3459,14 @@ def test_prompt_claim_debounce_is_per_drop(monkeypatch):
     )
     campaign = SimpleNamespace(id="campaign-1", name="Example campaign")
 
-    twitch._Twitch__claim_completed_drop_promptly(drop, campaign)
-    twitch._Twitch__claim_completed_drop_promptly(drop, campaign)
-    twitch._Twitch__claim_completed_drop_promptly(other_drop, campaign)
+    twitch.drop_claims.claim_completed_drop_promptly(drop, campaign)
+    twitch.drop_claims.claim_completed_drop_promptly(drop, campaign)
+    twitch.drop_claims.claim_completed_drop_promptly(other_drop, campaign)
 
     # Repeats for the same drop are debounced, but a second drop completing
     # within the debounce window still gets its own prompt claim.
     assert claimed == ["claim", "claim"]
-    assert set(twitch.prompt_claim_last) == {"instance-1", "instance-2"}
+    assert set(twitch.drop_claims.prompt_claim_last) == {"instance-1", "instance-2"}
 
 
 def test_prompt_claim_never_debounces_a_first_claim_on_a_fresh_clock(monkeypatch):
@@ -3475,10 +3482,10 @@ def test_prompt_claim_never_debounces_a_first_claim_on_a_fresh_clock(monkeypatch
     )
     campaign = SimpleNamespace(id="campaign-1", name="Example campaign")
 
-    twitch._Twitch__claim_completed_drop_promptly(drop, campaign)
+    twitch.drop_claims.claim_completed_drop_promptly(drop, campaign)
 
     assert claimed == ["claim"]
-    assert set(twitch.prompt_claim_last) == {"instance-1"}
+    assert set(twitch.drop_claims.prompt_claim_last) == {"instance-1"}
 
 
 def test_prompt_claim_skips_while_another_claim_pass_is_running(monkeypatch):
@@ -3489,44 +3496,38 @@ def test_prompt_claim_skips_while_another_claim_pass_is_running(monkeypatch):
     )
     campaign = SimpleNamespace(id="campaign-1", name="Example campaign")
 
-    twitch.prompt_claim_pass_lock.acquire()
+    twitch.drop_claims.prompt_claim_pass_lock.acquire()
     try:
-        twitch._Twitch__claim_completed_drop_promptly(drop, campaign)
+        twitch.drop_claims.claim_completed_drop_promptly(drop, campaign)
     finally:
-        twitch.prompt_claim_pass_lock.release()
+        twitch.drop_claims.prompt_claim_pass_lock.release()
 
     # Nothing was actually claimed (another pass was running), so the
     # optimistically-recorded debounce entry must be cleared rather than left
     # behind unusable - the sync cycle still covers this drop on its own
     # ~30-minute cadence, independent of this debounce.
     assert claimed == []
-    assert twitch.prompt_claim_last == {}
+    assert twitch.drop_claims.prompt_claim_last == {}
 
 
 def test_prompt_claim_clears_debounce_when_claim_raises(monkeypatch):
-    twitch_module = importlib.import_module("TwitchChannelPointsMiner.classes.Twitch")
-    monkeypatch.setattr(twitch_module, "Thread", _SyncThread)
+    monkeypatch.setattr(drop_claims_module, "Thread", _SyncThread)
     monkeypatch.setattr(
-        Twitch,
+        DropClaims,
         "claim_all_drops_from_inventory",
         lambda self: (_ for _ in ()).throw(RuntimeError("transient failure")),
     )
-    twitch = object.__new__(Twitch)
-    twitch.campaign_lookup_unavailable = False
-    twitch.unevaluated_category_slugs = set()
-    twitch.prompt_claim_lock = Lock()
-    twitch.prompt_claim_pass_lock = Lock()
-    twitch.prompt_claim_last = {}
+    twitch = SimpleNamespace(drop_claims=bare_drop_claims())
     drop = SimpleNamespace(
         name="Reward", minutes_required=10, drop_instance_id="instance-1"
     )
     campaign = SimpleNamespace(id="campaign-1", name="Example campaign")
 
-    twitch._Twitch__claim_completed_drop_promptly(drop, campaign)
+    twitch.drop_claims.claim_completed_drop_promptly(drop, campaign)
 
     # The claim attempt failed, so the debounce entry must be cleared rather
     # than left behind unusable.
-    assert twitch.prompt_claim_last == {}
+    assert twitch.drop_claims.prompt_claim_last == {}
 
 
 def test_channel_advertised_campaigns_are_recorded_on_the_stream(monkeypatch):
@@ -4138,7 +4139,7 @@ def test_inventory_progress_skips_drops_needing_an_unmet_subscription(
     monkeypatch, required_subs, current_subs, tracked
 ):
     twitch = bare_twitch(monkeypatch)
-    twitch.accepted_drop_claims = {}
+    twitch.drop_claims.accepted_drop_claims = {}
 
     twitch._Twitch__cache_drop_inventory_progress(
         inventory_with_drop(required_subs, current_subs)
@@ -4149,7 +4150,7 @@ def test_inventory_progress_skips_drops_needing_an_unmet_subscription(
 
 def test_claimed_sub_drop_still_counts_as_finished(monkeypatch):
     twitch = bare_twitch(monkeypatch)
-    twitch.accepted_drop_claims = {}
+    twitch.drop_claims.accepted_drop_claims = {}
     inventory = inventory_with_drop(1, 0)
     inventory["dropCampaignsInProgress"][0]["timeBasedDrops"][0]["self"][
         "isClaimed"
@@ -4972,8 +4973,6 @@ def drop_event_twitch(monkeypatch, inventory, statuses=("ELIGIBLE_FOR_ALL",)):
     twitch, _drop, requests, _saved, now = claim_recording_twitch(
         monkeypatch, statuses=statuses
     )
-    # Set by __init__ on a real Twitch; bare_twitch skips __init__.
-    twitch.prompt_claim_pass_lock = Lock()
     twitch_module = importlib.import_module("TwitchChannelPointsMiner.classes.Twitch")
     monkeypatch.setattr(twitch_module.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(
@@ -4985,7 +4984,6 @@ def drop_event_twitch(monkeypatch, inventory, statuses=("ELIGIBLE_FOR_ALL",)):
 
 
 def test_drop_claim_event_starts_a_background_worker(monkeypatch):
-    twitch_module = importlib.import_module("TwitchChannelPointsMiner.classes.Twitch")
     started = []
 
     class RecordingThread:
@@ -4995,14 +4993,14 @@ def test_drop_claim_event_starts_a_background_worker(monkeypatch):
         def start(self):
             pass
 
-    monkeypatch.setattr(twitch_module, "Thread", RecordingThread)
+    monkeypatch.setattr(drop_claims_module, "Thread", RecordingThread)
     twitch = object.__new__(Twitch)
 
     twitch.claim_drops_from_event({"drop_instance_id": "instance-1"})
 
     assert len(started) == 1
     target, _name, daemon = started[0]
-    assert target == twitch._Twitch__claim_drops_from_event_worker
+    assert target == twitch.drop_claims._claim_drops_from_event_worker
     assert daemon is True
 
 
@@ -5018,10 +5016,9 @@ def test_drop_claim_event_starts_a_background_worker(monkeypatch):
     ],
 )
 def test_drop_claim_event_ignores_malformed_payloads(monkeypatch, data):
-    twitch_module = importlib.import_module("TwitchChannelPointsMiner.classes.Twitch")
     started = []
     monkeypatch.setattr(
-        twitch_module,
+        drop_claims_module,
         "Thread",
         lambda **kwargs: started.append(kwargs),
     )
@@ -5037,10 +5034,10 @@ def test_drop_claim_event_claims_drop_once(monkeypatch):
         monkeypatch, claimable_inventory(connected=True)
     )
 
-    twitch._Twitch__claim_drops_from_event_worker()
+    twitch.drop_claims._claim_drops_from_event_worker()
 
     assert requests == ["instance-1"]
-    assert twitch.accepted_drop_ids == frozenset({"drop-1"})
+    assert twitch.drop_claims.accepted_drop_ids == frozenset({"drop-1"})
 
 
 def test_drop_claim_event_does_not_reclaim_an_accepted_drop(monkeypatch):
@@ -5050,8 +5047,8 @@ def test_drop_claim_event_does_not_reclaim_an_accepted_drop(monkeypatch):
         monkeypatch, claimable_inventory(connected=True)
     )
 
-    twitch._Twitch__claim_drops_from_event_worker()
-    twitch._Twitch__claim_drops_from_event_worker()
+    twitch.drop_claims._claim_drops_from_event_worker()
+    twitch.drop_claims._claim_drops_from_event_worker()
 
     assert requests == ["instance-1"]
 
@@ -5065,8 +5062,8 @@ def test_drop_claim_event_does_not_repeat_claim_for_unlinked_account(monkeypatch
         statuses=(("ELIGIBLE_FOR_ALL", False),),
     )
 
-    twitch._Twitch__claim_drops_from_event_worker()
-    twitch._Twitch__claim_drops_from_event_worker()
+    twitch.drop_claims._claim_drops_from_event_worker()
+    twitch.drop_claims._claim_drops_from_event_worker()
 
     assert requests == ["instance-1"]
-    assert "instance-1" in twitch.unlinked_drop_claims
+    assert "instance-1" in twitch.drop_claims.unlinked_drop_claims

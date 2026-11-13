@@ -33,6 +33,7 @@ files = [
     "TwitchChannelPointsMiner/classes/StreamSelection.py",
     "TwitchChannelPointsMiner/classes/DropAnalytics.py",
     "TwitchChannelPointsMiner/classes/DropInventory.py",
+    "TwitchChannelPointsMiner/classes/DropClaims.py",
 ]
 # Modules outside `files` are read for their types but not reported on.
 follow_imports = "silent"

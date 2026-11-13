@@ -1,6 +1,5 @@
 import importlib
 import logging
-from threading import Lock
 from types import SimpleNamespace
 
 from dateutil import parser
@@ -127,7 +126,6 @@ def _sync_campaigns_harness(monkeypatch, dashboards, details, passes):
     """
     twitch = bare_twitch(monkeypatch)
     twitch.running = True
-    twitch.prompt_claim_pass_lock = Lock()
     twitch.twitch_login = SimpleNamespace(get_user_id=lambda: "1", username="me")
     clock = {"now": 1_000_000.0}
     refreshes = []
