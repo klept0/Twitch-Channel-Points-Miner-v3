@@ -89,6 +89,12 @@ create a webhook, and copy its URL.
 |---|---|---|---|
 | `webhook_api` | str | Required | Discord webhook URL. |
 | `events` | list | Required | Events to send. |
+| `username` | str or None | `None` | Bot name shown on messages. `None` keeps `"Twitch Channel Points Miner"`. |
+| `avatar_url` | str or None | `None` | Bot icon URL. `None` keeps the default icon. |
+| `embed` | bool | `False` | Send each message as an embed instead of a code-fenced text message. |
+| `title` | str or None | `None` | Embed title, on the first part of a split message. `{event}` becomes the event name. Embed mode only. |
+| `color` | int or None | `None` | Embed colour as a 24-bit integer, such as `0x9146FF`. Embed mode only. |
+| `colors` | dict or None | `None` | Per-event colours, keyed by `Events` member or name. Overrides `color` for that event. Embed mode only. |
 
 ```python
 Discord(
@@ -96,6 +102,22 @@ Discord(
     events=[Events.STREAMER_OFFLINE, Events.BET_LOSE],
 )
 ```
+
+With embeds, the title and colours can be set per event:
+
+```python
+Discord(
+    webhook_api="https://discord.com/api/webhooks/ID/TOKEN",
+    events=[Events.BET_WIN, Events.BET_LOSE],
+    embed=True,
+    title="Miner: {event}",
+    color=0x9146FF,
+    colors={Events.BET_WIN: 0x2ECC71, Events.BET_LOSE: 0xE74C3C},
+)
+```
+
+Custom server emoji in the title use Discord's `<:name:id>` syntax. The message
+text itself comes from the miner's log lines.
 
 ## Generic Webhook
 
