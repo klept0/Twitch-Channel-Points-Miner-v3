@@ -61,6 +61,18 @@ def _isolate_launcher_logger_state():
     logger.setLevel(original_level)
 
 
+@pytest.fixture(autouse=True)
+def _suppress_native_message_boxes(monkeypatch):
+    # main()'s error paths call _message_box(), which on Windows opens a real
+    # modal MessageBoxW and blocks the test run until someone clicks OK. Tests
+    # that check the dialog itself replace ctypes.windll with their own fake.
+    windll = getattr(windows_launcher.ctypes, "windll", None)
+    if windll is not None:
+        monkeypatch.setattr(
+            windll.user32, "MessageBoxW", lambda *args: 1, raising=False
+        )
+
+
 def _fake_launch_shell_recording(
     calls,
     extract=lambda dashboard_info, initial_tab: (
