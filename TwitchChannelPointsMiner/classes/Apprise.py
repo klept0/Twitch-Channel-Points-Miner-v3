@@ -58,7 +58,7 @@ class Apprise(object):
         self.events = [str(event) for event in events]
         self.title = title
         self._client = None
-        self._reason = "No Apprise URL is configured."
+        self._reason: str | None = "No Apprise URL is configured."
         if not self.urls:
             return
         try:

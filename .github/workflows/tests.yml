@@ -99,6 +99,30 @@ jobs:
       - name: Check formatting
         run: python -m black --check --diff .
 
+  mypy:
+    name: Type check
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      # The checked modules import the runtime dependencies, so install them
+      # with mypy and its stubs (all pinned in requirements-dev.txt).
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      # Checks only the modules listed under [tool.mypy] in pyproject.toml.
+      - name: Check types
+        run: python -m mypy
+
   pytest:
     name: Python ${{ matrix.python-version }}
     needs: changes
