@@ -36,6 +36,7 @@ This repository is a Python Twitch channel points miner. Keep changes focused, p
 - Keep any metadata for an additional entry indented directly below that entry, including `BREAKING-CHANGE: ...`, and do not place unrelated text after the additional entries.
 - Before merging the Release Please PR, review its generated changelog and release notes for user-facing completeness and expand the summary when a single entry contains several notable changes.
 - Do not enable auto-merge on the Release Please PR because merging it is the action that publishes the combined release.
+- If a Release Please run created the release but failed before publishing, re-running it publishes nothing because it sees no new release. Run the Release Please workflow manually with `release_tag` set to that tag instead; it publishes the Docker image and Windows files and closes the released issues.
 
 ### Fork versioning
 
