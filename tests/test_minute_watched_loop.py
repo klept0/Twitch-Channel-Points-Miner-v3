@@ -34,7 +34,8 @@ def test_each_loop_runs_one_pass_with_the_watch_settings():
             watch_status_interval_minutes=9,
         )
 
-    assert calls == [(["streamer"], ["priority"], 4, 1, ["source"], 7, 3, 9)]
+    # The last argument is the loop's spade-URL warning set, shared by passes.
+    assert calls == [(["streamer"], ["priority"], 4, 1, ["source"], 7, 3, 9, set())]
     sleep.assert_called_once()
     assert sleep.call_args.kwargs == {"chunk_size": 4}
 
