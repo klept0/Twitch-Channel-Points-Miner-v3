@@ -8,6 +8,7 @@ from threading import Lock, RLock, Thread, Timer
 
 from dateutil import parser
 
+from TwitchChannelPointsMiner.classes.CopyOnWriteList import CopyOnWriteList
 from TwitchChannelPointsMiner.classes.entities.CommunityGoal import CommunityGoal
 from TwitchChannelPointsMiner.classes.entities.EventPrediction import EventPrediction
 from TwitchChannelPointsMiner.classes.entities.Message import Message
@@ -28,7 +29,8 @@ class WebSocketsPool:
     __slots__ = ["ws", "twitch", "streamers", "events_predictions", "topic_lock"]
 
     def __init__(self, twitch, streamers, events_predictions):
-        self.ws = []
+        # Read without topic_lock by the main loop's checks; see CopyOnWriteList.
+        self.ws = CopyOnWriteList()
         self.twitch = twitch
         self.streamers = streamers
         self.events_predictions = events_predictions
@@ -251,6 +253,17 @@ class WebSocketsPool:
             # Set the current socket as reconnecting status
             # So the external ping check will be locked
             ws.is_reconnecting = True
+
+        # keep_running = False only stops run_forever() after its current
+        # read, which never returns on a half-open connection, leaking the
+        # thread. Close the socket too. Outside the lock: close() calls back
+        # into on_close, which lands here and returns at is_reconnecting.
+        close = getattr(ws, "close", None)
+        if close is not None:
+            try:
+                close()
+            except Exception as error:
+                logger.debug(f"#{ws.index} - Closing the old WebSocket failed: {error}")
 
         if ws.forced_close is False:
             logger.info(

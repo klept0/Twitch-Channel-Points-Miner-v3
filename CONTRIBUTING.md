@@ -128,6 +128,15 @@ black --check .
 CI runs the same check on every pull request. The one-off Black reformat is listed in `.git-blame-ignore-revs`; to make `git blame` skip it locally, run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once in your clone.
 
 You can use the pre-commit hook, which runs the same Black version.
+
+### Type checking
+A few modules are type-checked with [mypy](https://mypy-lang.org/), pinned in `requirements-dev.txt`. Only the modules listed under `[tool.mypy]` in `pyproject.toml` are checked, including the bodies of functions without annotations (`check_untyped_defs`); the list grows as more of the code is annotated.
+```
+pip install -r requirements-dev.txt
+python -m mypy
+```
+
+CI runs the same check on every pull request. If you change a checked module, keep it passing. To add a module, annotate it until `python -m mypy` passes with it in the list.
 ```
 pip install pre-commit
 pre-commit install

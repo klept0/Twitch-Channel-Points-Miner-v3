@@ -15,7 +15,7 @@ import string
 import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from secrets import choice, token_hex
 from threading import BoundedSemaphore, Event, Lock, RLock, Thread, local
@@ -26,6 +26,8 @@ import requests
 from colorama import Fore
 
 from TwitchChannelPointsMiner.classes.ClientSession import ClientSession
+from TwitchChannelPointsMiner.classes.DropAnalytics import DropAnalytics
+from TwitchChannelPointsMiner.classes.DropInventory import DropInventory
 from TwitchChannelPointsMiner.classes.DropBadgeCatalog import (
     completed_signature_matches,
 )
@@ -43,7 +45,6 @@ from TwitchChannelPointsMiner.classes.entities.Drop import (
     utc_now,
 )
 from TwitchChannelPointsMiner.classes.entities.Streamer import (
-    discovery_source,
     discovery_sources,
     is_category_tier,
     is_drop_discovered,
@@ -62,11 +63,11 @@ from TwitchChannelPointsMiner.classes.gql.Integration import GQLFactory
 from TwitchChannelPointsMiner.classes.Settings import (
     Events,
     FollowersOrder,
-    Priority,
     Settings,
     StreamerSource,
 )
 from TwitchChannelPointsMiner.classes.StreamSegmentWatcher import StreamSegmentWatcher
+from TwitchChannelPointsMiner.classes.StreamSelection import StreamSelector
 from TwitchChannelPointsMiner.classes.TwitchDropsApp import TwitchDropsAppScraper
 from TwitchChannelPointsMiner.classes.TwitchLogin import TwitchLogin
 from TwitchChannelPointsMiner.constants import (
@@ -79,7 +80,6 @@ from TwitchChannelPointsMiner.constants import (
     USER_AGENTS,
     GQLOperations,
 )
-from TwitchChannelPointsMiner.data_migration import ANALYTICS_DATA_VERSION
 from TwitchChannelPointsMiner.logger import (
     ANDROID_LOGIN_COLOR,
     SKIP_NOTIFICATIONS,
@@ -153,6 +153,10 @@ TWITCH_LOGIN_PATTERN = re.compile(r"[a-z0-9_]{1,25}")
 DROPS_DIRECTORY_LIMIT = 100
 # Pages of the Drops directory read per category lookup (see #211).
 DROPS_DIRECTORY_MAX_PAGES = 5
+# Android-login dashboard replies in a row with a null campaign list and no
+# errors before the list counts as withheld and is treated as empty (see
+# __get_drops_dashboard).
+DROPS_DASHBOARD_WITHHELD_LIMIT = 3
 # Outcome of the calling thread's latest drops dashboard request. Thread-local
 # so the campaign sync thread's dashboard calls cannot be mistaken for the
 # category discovery pass's own.
@@ -214,6 +218,7 @@ class Twitch(object):
         "campaign_lookup_unavailable",
         "campaign_details_withheld_logged",
         "campaign_details_withheld_streak",
+        "drops_dashboard_withheld_streak",
         "unevaluated_category_slugs",
         "awarded_game_event_drops",
         "twitchdrops_app_campaigns",
@@ -251,6 +256,7 @@ class Twitch(object):
         "category_drops_override_streamers",
         "evaluated_category_campaigns",
         "completed_drop_campaigns",
+        "completed_drop_campaigns_lock",
         "prompt_claim_lock",
         "prompt_claim_pass_lock",
         "prompt_claim_last",
@@ -342,6 +348,7 @@ class Twitch(object):
         self.campaign_lookup_unavailable = False
         self.campaign_details_withheld_logged = False
         self.campaign_details_withheld_streak = 0
+        self.drops_dashboard_withheld_streak = 0
         self.unevaluated_category_slugs = set()
         self.awarded_game_event_drops = {}
         self.twitchdrops_app_campaigns = {}
@@ -408,6 +415,7 @@ class Twitch(object):
         self.category_drops_override_streamers = False
         self.evaluated_category_campaigns = set()
         self.completed_drop_campaigns = set()
+        self.completed_drop_campaigns_lock = Lock()
         self.prompt_claim_lock = Lock()
         self.prompt_claim_pass_lock = Lock()
         self.prompt_claim_last = {}
@@ -677,33 +685,6 @@ class Twitch(object):
                 level=logging.DEBUG,
             )
 
-    def __drop_tracking_key(self, drop, campaign_name=None, category_name=None):
-        return "|".join(
-            [
-                str(drop.id or ""),
-                str(drop.item_art_url or ""),
-                str(drop.name or ""),
-                str(campaign_name or ""),
-                str(category_name or ""),
-            ]
-        )
-
-    def __should_save_drop_snapshot(self, tracking_key, minutes_watched, status):
-        last_saved_minutes = self.drop_progress_last_saved.get(tracking_key, -1)
-        last_saved_status = self.drop_status_last_saved.get(tracking_key)
-        if minutes_watched > last_saved_minutes:
-            return True
-
-        # Terminal state updates can happen without minute changes.
-        if status in ["captured", "failed"] and status != last_saved_status:
-            return True
-
-        return False
-
-    def __mark_drop_snapshot_saved(self, tracking_key, minutes_watched, status):
-        self.drop_progress_last_saved[tracking_key] = minutes_watched
-        self.drop_status_last_saved[tracking_key] = status
-
     def __slugify(self, value: str) -> str:
         normalized = unicodedata.normalize("NFKD", str(value))
         ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
@@ -718,83 +699,14 @@ class Twitch(object):
         return re.sub(r"[^a-z0-9]+", "-", ascii_value.lower()).strip("-")
 
     def __cache_drop_inventory_progress(self, inventory: dict):
-        progress_by_game = {}
-        finished_ids = set()
-        accepted_claims = getattr(self, "accepted_drop_claims", None) or {}
-        for campaign in inventory.get("dropCampaignsInProgress", []) or []:
-            if not isinstance(campaign, dict):
-                continue
-            game = campaign.get("game") or {}
-            game_name = (game.get("displayName") or game.get("name") or "").strip()
-            game_slug = self.__slugify(game_name)
-            if game_slug == "":
-                continue
-
-            campaign_id = str(campaign.get("id") or "")
-            campaign_name = str(campaign.get("name") or "Unknown campaign")
-            # The allow-listed channels, or None when any channel counts. A
-            # record without allow data takes the campaign's last known
-            # scope; failing that, it is still the account's own progress,
-            # so it counts for every channel, as before, rather than holding
-            # no pick at all.
-            scope, channel_logins = self.__known_campaign_scope(campaign_id, campaign)
-            allowed_channels = (
-                tuple(sorted(channel_logins))
-                if scope is CampaignChannelScope.RESTRICTED
-                else None
-            )
-            for drop in campaign.get("timeBasedDrops", []) or []:
-                if not isinstance(drop, dict):
-                    continue
-                drop_self = drop.get("self")
-                if not isinstance(drop_self, dict):
-                    continue
-                required_minutes = drop.get("requiredMinutesWatched") or 0
-                current_minutes = drop_self.get("currentMinutesWatched") or 0
-                instance_id = drop_self.get("dropInstanceID")
-                # An accepted claim counts as claimed; the inventory is lagging.
-                claimed = (
-                    drop_self.get("isClaimed") is True or instance_id in accepted_claims
-                )
-                # A fully watched drop counts as finished only once it can be
-                # claimed: until Twitch issues its instance, it may still need
-                # watching.
-                if drop.get("id") and (
-                    claimed or (instance_id and 0 < required_minutes <= current_minutes)
-                ):
-                    finished_ids.add(str(drop["id"]))
-                if claimed or drop_self.get("hasPreconditionsMet") is False:
-                    continue
-
-                if required_minutes <= 0 or current_minutes >= required_minutes:
-                    continue
-                # Watching alone cannot earn it until the account subscribes.
-                if drop_sub_requirement_unmet(drop):
-                    continue
-
-                progress_by_game.setdefault(game_slug, []).append(
-                    (
-                        campaign_id,
-                        campaign_name,
-                        str(drop.get("id") or ""),
-                        str(drop.get("name") or "Unknown drop"),
-                        current_minutes,
-                        required_minutes,
-                        allowed_channels,
-                    )
-                )
-
-        self.drop_inventory_progress = {
-            game_slug: tuple(sorted(progress))
-            for game_slug, progress in progress_by_game.items()
-        }
-        self.drop_inventory_minutes_by_drop_id = {
-            drop_id: current
-            for progress in progress_by_game.values()
-            for (_, _, drop_id, _, current, _, _) in progress
-            if drop_id
-        }
-        self.drop_inventory_finished_ids = frozenset(finished_ids)
+        progress = DropInventory(inventory).progress(
+            self.__slugify,
+            self.__known_campaign_scope,
+            getattr(self, "accepted_drop_claims", None) or {},
+        )
+        self.drop_inventory_progress = progress.by_game
+        self.drop_inventory_minutes_by_drop_id = progress.minutes_by_drop_id
+        self.drop_inventory_finished_ids = progress.finished_ids
         self.drop_inventory_progress_updated_at = time.time()
 
     def __with_inventory_drop_progress(self, campaign: dict) -> dict:
@@ -821,38 +733,7 @@ class Twitch(object):
         if not minutes_by_drop_id:
             return campaign
 
-        changed = False
-        drops = []
-        for drop in campaign.get("timeBasedDrops", []) or []:
-            drop_id = str(drop.get("id") or "") if isinstance(drop, dict) else ""
-            if drop_id in minutes_by_drop_id and not isinstance(drop.get("self"), dict):
-                drop_self = {
-                    "isClaimed": False,
-                    "hasPreconditionsMet": True,
-                    "currentMinutesWatched": minutes_by_drop_id[drop_id],
-                }
-                required_subs = drop_required_subs(drop)
-                if required_subs:
-                    # The snapshot keeps only drops whose subscription
-                    # requirement the account had met (see
-                    # __cache_drop_inventory_progress).
-                    drop_self["currentSubs"] = required_subs
-                drop = {**drop, "self": drop_self}
-                changed = True
-            drops.append(drop)
-        if not changed:
-            return campaign
-        return {**campaign, "timeBasedDrops": drops}
-
-    @staticmethod
-    def __drop_progress_label(progress) -> str:
-        labels = [
-            f"{campaign_name} / {drop_name} ({current}/{required}m)"
-            for _, campaign_name, _, drop_name, current, required, _ in progress[:3]
-        ]
-        if len(progress) > 3:
-            labels.append(f"{len(progress) - 3} more")
-        return ", ".join(labels)
+        return DropInventory.with_progress(campaign, minutes_by_drop_id)
 
     def __drop_progress_streamer_cooldowns(
         self, streamers, now: float, stall_seconds: float
@@ -944,7 +825,7 @@ class Twitch(object):
                     logger.info(
                         f"{Fore.GREEN}Drop progress resumed on {streamer.username} "
                         f"after rotating from {rotated_from}: "
-                        f"{self.__drop_progress_label(progress)}{Fore.RESET}",
+                        f"{DropInventory.progress_label(progress)}{Fore.RESET}",
                         extra={
                             "emoji": ":white_check_mark:",
                             "event": Events.DROP_STATUS,
@@ -976,7 +857,7 @@ class Twitch(object):
                     f"{stalled_for / 60:.0f}m on {streamer.username}, which was "
                     "standing in for the discovered Drops pick; it no longer "
                     "replaces the discovered pick on this broadcast. Current "
-                    f"progress: {self.__drop_progress_label(progress)}"
+                    f"progress: {DropInventory.progress_label(progress)}"
                     f"{Fore.RESET}",
                     extra={
                         "emoji": ":arrows_counterclockwise:",
@@ -1008,7 +889,7 @@ class Twitch(object):
                     f"{Fore.YELLOW}Drop progress has not changed for "
                     f"{stalled_for / 60:.0f}m on {streamer.username}; rotating to "
                     f"another eligible {game_name} channel ({', '.join(alternatives)}). "
-                    f"Current progress: {self.__drop_progress_label(progress)}"
+                    f"Current progress: {DropInventory.progress_label(progress)}"
                     f"{Fore.RESET}",
                     extra={
                         "emoji": ":arrows_counterclockwise:",
@@ -1021,7 +902,7 @@ class Twitch(object):
                     f"{Fore.YELLOW}Drop progress has not changed for "
                     f"{stalled_for / 60:.0f}m on {streamer.username}, but no other "
                     f"eligible live {game_name} channel is available; continuing to "
-                    f"watch. Current progress: {self.__drop_progress_label(progress)}"
+                    f"watch. Current progress: {DropInventory.progress_label(progress)}"
                     f"{Fore.RESET}",
                     extra={"emoji": ":warning:", "event": Events.DROP_STATUS},
                 )
@@ -1032,157 +913,6 @@ class Twitch(object):
             for username, deadline in state.get("blocked_until", {}).items()
             if deadline > now
         }
-
-    def __drop_variant_entries(self, drop_dict):
-        benefit_edges = drop_dict.get("benefitEdges", []) or []
-        variants = []
-
-        if benefit_edges == []:
-            variants.append(
-                {
-                    "name": drop_dict.get("name"),
-                    "benefit": drop_dict.get("name"),
-                    "item_art_url": None,
-                }
-            )
-            return variants
-
-        for edge in benefit_edges:
-            benefit = edge.get("benefit", {}) if isinstance(edge, dict) else {}
-            variants.append(
-                {
-                    "name": benefit.get("name") or drop_dict.get("name"),
-                    "benefit": benefit.get("name") or drop_dict.get("name"),
-                    "item_art_url": self.__extract_edge_art_url(benefit),
-                }
-            )
-
-        return variants
-
-    def __extract_edge_art_url(self, benefit):
-        if not isinstance(benefit, dict):
-            return None
-
-        for key in [
-            "imageAssetURL",
-            "imageAssetUrl",
-            "imageURL",
-            "imageUrl",
-            "thumbnailURL",
-            "thumbnailUrl",
-        ]:
-            if benefit.get(key):
-                return benefit.get(key)
-        return None
-
-    def __drop_variant_entries_from_drop(self, drop):
-        variants = []
-        benefit_edges = getattr(drop, "benefit_edges", []) or []
-
-        if benefit_edges == []:
-            variants.append(
-                {
-                    "name": drop.name,
-                    "benefit": drop.benefit,
-                    "item_art_url": drop.item_art_url,
-                }
-            )
-            return variants
-
-        for edge in benefit_edges:
-            benefit = edge.get("benefit", {}) if isinstance(edge, dict) else {}
-            variants.append(
-                {
-                    "name": benefit.get("name") or drop.name,
-                    "benefit": benefit.get("name") or drop.benefit,
-                    "item_art_url": self.__extract_edge_art_url(benefit)
-                    or drop.item_art_url,
-                }
-            )
-
-        return variants
-
-    def __save_drop_snapshot_from_dict(
-        self,
-        drop_dict,
-        campaign=None,
-        streamer_username=None,
-        campaign_name_override=None,
-        category_name_override=None,
-        status_override=None,
-    ):
-        drop_self = drop_dict.get("self")
-        if not isinstance(drop_self, dict):
-            return
-
-        try:
-            drop = Drop(drop_dict)
-            drop.update(drop_self)
-        except (KeyError, TypeError, ValueError):
-            return
-
-        if drop.has_preconditions_met is False:
-            return
-
-        is_done = (
-            drop.is_claimed is True
-            or drop.current_minutes_watched >= drop.minutes_required
-        )
-        is_expired = (
-            getattr(drop, "end_at", None) is not None and utc_now() > drop.end_at
-        )
-
-        progress_key = self.__drop_tracking_key(
-            drop,
-            campaign_name=campaign_name_override,
-            category_name=category_name_override,
-        )
-        status = (
-            "captured"
-            if is_done is True
-            else (
-                "failed"
-                if is_expired and drop.current_minutes_watched < drop.minutes_required
-                else "in_progress"
-            )
-        )
-
-        effective_status = status_override or status
-
-        for variant in self.__drop_variant_entries_from_drop(drop):
-            variant_key = "|".join(
-                [
-                    progress_key,
-                    str(variant.get("name") or ""),
-                    str(variant.get("item_art_url") or ""),
-                ]
-            )
-            if (
-                self.__should_save_drop_snapshot(
-                    variant_key,
-                    drop.current_minutes_watched,
-                    effective_status,
-                )
-                is False
-            ):
-                continue
-
-            self.__mark_drop_snapshot_saved(
-                variant_key,
-                drop.current_minutes_watched,
-                effective_status,
-            )
-            self.__save_drop_progress_analytics(
-                drop,
-                campaign=campaign,
-                streamer_username=streamer_username,
-                campaign_name_override=campaign_name_override,
-                category_name_override=category_name_override,
-                status_override=effective_status,
-                item_name_override=variant.get("name"),
-                benefit_override=variant.get("benefit"),
-                item_art_url_override=variant.get("item_art_url"),
-            )
 
     def scrape_drop_progress_from_inventory(self, reason="startup"):
         self.__log_drop_check(f"inventory scrape started ({reason})")
@@ -1230,7 +960,7 @@ class Twitch(object):
                 )
 
                 if drop.has_preconditions_met is not False:
-                    progress_key = self.__drop_tracking_key(
+                    progress_key = self.__drop_analytics().tracking_key(
                         drop,
                         campaign_name=campaign_name_override,
                         category_name=category_name_override,
@@ -1246,7 +976,7 @@ class Twitch(object):
                         )
                     )
                     variant_saved = False
-                    for variant in self.__drop_variant_entries_from_drop(drop):
+                    for variant in self.__drop_analytics().variant_entries(drop):
                         variant_key = "|".join(
                             [
                                 progress_key,
@@ -1255,7 +985,7 @@ class Twitch(object):
                             ]
                         )
                         if (
-                            self.__should_save_drop_snapshot(
+                            self.__drop_analytics().should_save_snapshot(
                                 variant_key,
                                 drop.current_minutes_watched,
                                 status,
@@ -1264,12 +994,12 @@ class Twitch(object):
                         ):
                             continue
 
-                        self.__mark_drop_snapshot_saved(
+                        self.__drop_analytics().mark_snapshot_saved(
                             variant_key,
                             drop.current_minutes_watched,
                             status,
                         )
-                        self.__save_drop_progress_analytics(
+                        self.__drop_analytics().save_drop_progress(
                             drop,
                             campaign=None,
                             streamer_username=None,
@@ -1626,155 +1356,42 @@ class Twitch(object):
 
         return category_name, streamer_name
 
-    def __has_incomplete_drop_in_campaign(self, campaign_dict: dict) -> bool:
-        for drop_dict in campaign_dict.get("timeBasedDrops", []) or []:
-            drop_self = drop_dict.get("self")
-            if not isinstance(drop_self, dict):
-                continue
-
-            try:
-                drop = Drop(drop_dict)
-                drop.update(drop_self)
-            except (KeyError, TypeError, ValueError):
-                continue
-
-            if drop.has_preconditions_met is False:
-                continue
-
-            if (
-                drop.is_claimed is False
-                and drop.current_minutes_watched < drop.minutes_required
-            ):
-                if getattr(drop, "end_at", None) is None or utc_now() <= drop.end_at:
-                    return True
-
-        return False
-
-    def __active_drop_category_slugs_from_inventory(self, inventory: dict) -> set:
-        active_slugs = set()
-        for campaign in inventory.get("dropCampaignsInProgress", []) or []:
-            if not isinstance(campaign, dict):
-                continue
-
-            game = campaign.get("game") or {}
-            game_name = (game.get("displayName") or game.get("name") or "").strip()
-            if game_name == "":
-                continue
-
-            if self.__has_incomplete_drop_in_campaign(campaign) is True:
-                active_slugs.add(self.__slugify(game_name))
-
-        return active_slugs
-
     def __completed_drop_ids_from_inventory(self, inventory: dict) -> set:
-        completed_ids = set()
-
-        for campaign in inventory.get("dropCampaignsInProgress", []) or []:
-            if not isinstance(campaign, dict):
-                continue
-            for drop in campaign.get("timeBasedDrops", []) or []:
-                if not isinstance(drop, dict):
-                    continue
-                drop_self = drop.get("self") or {}
-                if drop_self.get("isClaimed") is True and drop.get("id"):
-                    completed_ids.add(str(drop["id"]))
-
         # Claims Twitch accepted count too: the inventory may never confirm
         # them (for example, when the game account is not linked).
-        return completed_ids | set(getattr(self, "accepted_drop_ids", None) or ())
-
-    def __completed_campaign_ids_from_inventory(self, inventory: dict) -> set:
-        completed_ids = set()
-
-        for completed_record in inventory.get("completedRewardCampaigns", []) or []:
-            if not isinstance(completed_record, dict):
-                continue
-            _, campaign_id = self.__completed_record_campaign(completed_record)
-            if campaign_id is not None:
-                completed_ids.add(campaign_id)
-
-        # Twitch can briefly leave a completed campaign in the in-progress
-        # collection before moving it to completedRewardCampaigns. All Drops
-        # being explicitly claimed is also authoritative completion evidence,
-        # as is every drop having already accrued its required watch time:
-        # claiming is an inventory call that does not need more watching, so a
-        # fully captured but not-yet-claimed campaign must not stay watchable.
-        for campaign in inventory.get("dropCampaignsInProgress", []) or []:
-            if not isinstance(campaign, dict):
-                continue
-            campaign_id = campaign.get("id")
-            drops = campaign.get("timeBasedDrops", []) or []
-            if campaign_id in [None, ""] or not drops:
-                continue
-            if all(
-                isinstance(drop, dict)
-                and isinstance(drop.get("self"), dict)
-                and self.__inventory_drop_is_done(drop)
-                for drop in drops
-            ):
-                completed_ids.add(str(campaign_id))
-
-        return completed_ids
-
-    @staticmethod
-    def __inventory_drop_is_done(drop: dict) -> bool:
-        drop_self = drop.get("self")
-        if not isinstance(drop_self, dict):
-            return False
-        if drop_self.get("isClaimed") is True:
-            return True
-        required_minutes = drop.get("requiredMinutesWatched") or 0
-        return (
-            required_minutes > 0
-            and (drop_self.get("currentMinutesWatched") or 0) >= required_minutes
+        return DropInventory(inventory).claimed_drop_ids() | set(
+            getattr(self, "accepted_drop_ids", None) or ()
         )
 
-    def __merge_campaign_inventory_progress(
-        self, campaign: dict, inventory_campaign: dict
-    ) -> dict:
-        """Keep fresh campaign drops with authenticated inventory state and access."""
-        if not campaign.get("timeBasedDrops"):
-            merged_campaign = copy.deepcopy(inventory_campaign)
-            # The fresh record's allow-list still applies when the inventory
-            # carries none.
-            if not isinstance(merged_campaign.get("allow"), dict) and isinstance(
-                campaign.get("allow"), dict
-            ):
-                merged_campaign["allow"] = copy.deepcopy(campaign["allow"])
-            return merged_campaign
+    def __completed_drop_campaigns_lock(self):
+        # Defensive getattr: some tests construct Twitch via __new__ and skip
+        # __init__ (mirroring __claim_lock).
+        lock = getattr(self, "completed_drop_campaigns_lock", None)
+        if lock is None:
+            lock = Lock()
+            self.completed_drop_campaigns_lock = lock
+        return lock
 
-        merged_campaign = copy.deepcopy(campaign)
-        if isinstance(inventory_campaign.get("allow"), dict):
-            merged_campaign["allow"] = copy.deepcopy(inventory_campaign["allow"])
-        if not inventory_campaign.get("timeBasedDrops"):
-            return merged_campaign
-
-        merged_drops = merged_campaign.get("timeBasedDrops", [])
-        merged_drop_ids = {
-            str(drop.get("id"))
-            for drop in merged_drops
-            if isinstance(drop, dict) and drop.get("id") not in [None, ""]
-        }
-        inventory_drops = {
-            str(drop.get("id")): drop
-            for drop in inventory_campaign.get("timeBasedDrops", []) or []
-            if isinstance(drop, dict) and drop.get("id") not in [None, ""]
-        }
-
-        for drop in merged_drops:
-            if not isinstance(drop, dict) or drop.get("id") in [None, ""]:
-                continue
-            inventory_drop = inventory_drops.get(str(drop["id"]))
-            if isinstance(inventory_drop, dict) and isinstance(
-                inventory_drop.get("self"), dict
-            ):
-                drop["self"] = inventory_drop["self"]
-
-        for drop_id, drop in inventory_drops.items():
-            if drop_id not in merged_drop_ids:
-                merged_drops.append(copy.deepcopy(drop))
-
-        return merged_campaign
+    def __merge_completed_drop_campaigns(self, inventory: dict) -> set:
+        drop_inventory = DropInventory(inventory)
+        completed_ids = drop_inventory.completed_campaign_ids()
+        reopened_ids = drop_inventory.reopened_campaign_ids()
+        # Replace the set instead of changing it in place, so a reader that
+        # already holds the old set (the category discovery thread) never sees
+        # it change size mid-iteration.
+        with self.__completed_drop_campaigns_lock():
+            previous_ids = set(self.completed_drop_campaigns)
+            reopened_previously_completed = previous_ids & reopened_ids
+            self.completed_drop_campaigns = (
+                previous_ids - reopened_ids
+            ) | completed_ids
+        if reopened_previously_completed:
+            self.__log_drop_check(
+                "Campaigns reopened after completion, mining them again: "
+                + ", ".join(sorted(reopened_previously_completed)),
+                logging.DEBUG,
+            )
+        return completed_ids
 
     def __known_campaign_scope(self, campaign_id, campaign, log=False) -> tuple:
         """campaign_channel_scope of the campaign, remembered by campaign ID.
@@ -2127,8 +1744,7 @@ class Twitch(object):
             if name_key:
                 names.add(name_key)
 
-        completed_campaign_ids = self.__completed_campaign_ids_from_inventory(inventory)
-        self.completed_drop_campaigns.update(completed_campaign_ids)
+        completed_campaign_ids = self.__merge_completed_drop_campaigns(inventory)
         dashboard_campaigns = self.__get_drops_dashboard(status="OPEN")
         # Snapshot this thread's dashboard outcome for the discovery filters.
         # Stubs that never write the thread-local count as a loaded dashboard.
@@ -2185,7 +1801,7 @@ class Twitch(object):
         for completed_record in inventory.get("completedRewardCampaigns", []) or []:
             if not isinstance(completed_record, dict):
                 continue
-            campaign, _ = self.__completed_record_campaign(completed_record)
+            campaign, _ = DropInventory.completed_record_campaign(completed_record)
             # Only a top-level ID: everything downstream reads campaign["id"],
             # so a record identified by a nested ID cannot be used here.
             campaign_id = campaign.get("id")
@@ -2271,7 +1887,7 @@ class Twitch(object):
         # Keep each one authoritative for this session so the external campaign
         # catalog cannot resurrect it; other campaigns of the same game remain
         # eligible through the catalog.
-        for campaign_id in self.completed_drop_campaigns:
+        for campaign_id in tuple(self.completed_drop_campaigns):
             game_slug = self.campaign_game_slugs.get(str(campaign_id))
             if game_slug:
                 _record_twitch_campaign(game_slug, campaign_id)
@@ -2321,7 +1937,7 @@ class Twitch(object):
                 continue
             inventory_campaign = inventory_campaigns.get(campaign_id)
             if inventory_campaign is not None:
-                campaign = self.__merge_campaign_inventory_progress(
+                campaign = DropInventory.merge_campaign_progress(
                     campaign, inventory_campaign
                 )
                 game = campaign.get("game") or {}
@@ -2531,7 +2147,7 @@ class Twitch(object):
             self.__get_available_badge_names(refresh=True)
             | self.__get_viewer_reward_drop_earned_names()
         )
-        captured_drop_history = self.__captured_drop_history()
+        captured_drop_history = self.__drop_analytics().captured_history()
         self.__log_drop_check_json(
             "completedRewardCampaigns signatures available for gist matching",
             sorted(
@@ -2904,30 +2520,6 @@ class Twitch(object):
                 return True
         return False
 
-    @staticmethod
-    def __captured_drop_history():
-        if Settings.enable_analytics is not True:
-            return []
-
-        analytics_file = os.path.join(Settings.analytics_path, "drops_by_category.json")
-        if os.path.isfile(analytics_file) is False:
-            return []
-
-        try:
-            with open(analytics_file, "r", encoding="utf-8") as current:
-                data = json.load(current)
-        except (OSError, json.JSONDecodeError):
-            return []
-
-        drops = data.get("drops") if isinstance(data, dict) else None
-        if not isinstance(drops, list):
-            return []
-        return [
-            item
-            for item in drops
-            if isinstance(item, dict) and item.get("status") == "captured"
-        ]
-
     def __fallback_reward_was_captured(
         self, reward_name, campaign, game_name, captured_drop_history
     ):
@@ -3242,16 +2834,6 @@ class Twitch(object):
             inventory, known_signatures_by_id
         )[0]
 
-    @staticmethod
-    def __completed_record_campaign(completed_record):
-        campaign = completed_record.get("campaign")
-        if not isinstance(campaign, dict):
-            campaign = completed_record
-        campaign_id = campaign.get("id")
-        if campaign_id in [None, ""] and isinstance(campaign.get("campaign"), dict):
-            campaign_id = campaign["campaign"].get("id")
-        return campaign, None if campaign_id in [None, ""] else str(campaign_id)
-
     def __completed_badge_campaign_evidence(self, inventory, known_signatures_by_id):
         """Return (signatures, full_signatures, signatures_by_id, unsignable).
 
@@ -3275,7 +2857,9 @@ class Twitch(object):
             if not isinstance(completed_record, dict):
                 unsignable += 1
                 continue
-            campaign, campaign_id = self.__completed_record_campaign(completed_record)
+            campaign, campaign_id = DropInventory.completed_record_campaign(
+                completed_record
+            )
 
             game = campaign.get("game")
             game_name = ""
@@ -5765,1048 +5349,299 @@ class Twitch(object):
         drop_pick_stickiness_minutes=0,
         watch_status_interval_minutes=15,
     ):
+        # Streamers already warned about a missing spade URL, so the warning
+        # is logged once per outage instead of on every watch cycle.
+        spade_url_warned = set()
         while self.running:
             iteration_started_at = time.time()
             try:
-                now = time.time()
-                # Snapshot the shared streamers list once per iteration - it can be
-                # reassigned in-place (self.streamers[:] = ...) from other threads
-                # (config reload / category reconciliation), and indexing into a
-                # list that shrinks mid-iteration raises IndexError.
-                streamers_snapshot = list(streamers)
-                drop_progress_cooldowns = self.__drop_progress_streamer_cooldowns(
-                    streamers_snapshot,
-                    now,
-                    max(float(drop_progress_stall_minutes), 0) * 60,
+                self.__send_minute_watched_pass(
+                    streamers,
+                    priority,
+                    chunk_size,
+                    streams_watched,
+                    source_priority,
+                    drop_progress_stall_minutes,
+                    drop_pick_stickiness_minutes,
+                    watch_status_interval_minutes,
+                    spade_url_warned,
                 )
-                # Refresh eligibility for every online streamer before filtering
-                # streamers_index below - a category streamer excluded here for a
-                # stale/negative __drops_condition result would otherwise never be
-                # passed to check_streamer_online again (that used to only run for
-                # streamers already in streamers_index), leaving a flaky negative
-                # cached until the next full category refresh (minutes later).
-                # Category streams use a tighter 2-minute gate matching the
-                # underlying Stream.update_required() granularity, so a false
-                # negative self-heals quickly instead of waiting up to 10 minutes.
-                for i in range(0, len(streamers_snapshot)):
-                    if streamers_snapshot[i].is_online is not True:
-                        continue
-                    stale_after_seconds = (
-                        120 if is_drop_discovered(streamers_snapshot[i]) else 600
-                    )
-                    if (
-                        streamers_snapshot[i].stream.update_elapsed()
-                        >= stale_after_seconds
-                    ):
-                        # The last stream/eligibility update is older than the
-                        # staleness window for this streamer's source - refresh it
-                        # now instead of watching it drift further out of date.
-                        self.check_streamer_online(streamers_snapshot[i])
-
-                streamers_index = [
-                    i
-                    for i in range(0, len(streamers_snapshot))
-                    if streamers_snapshot[i].is_online is True
-                    and (
-                        not is_drop_discovered(streamers_snapshot[i])
-                        or self.__drops_condition(streamers_snapshot[i]) is True
-                        # A transient per-channel eligibility failure must not
-                        # exclude the previous drop pick before the rescue
-                        # check below (Priority.DROPS) ever gets to see it -
-                        # without this, __previous_pick_still_farming's
-                        # streamer was already filtered out here and the
-                        # rescue path could never run.
-                        or self.__previous_pick_still_farming(streamers_snapshot[i])
-                        is True
-                    )
-                    and (
-                        streamers_snapshot[i].online_at == 0
-                        or (now - streamers_snapshot[i].online_at) > 30
-                    )
-                    and (
-                        self._has_reached_points_limit(streamers_snapshot[i]) is False
-                        or self._has_pending_watch_streak(streamers_snapshot[i], now)
-                    )
-                    and (
-                        (
-                            self.__slugify(
-                                streamers_snapshot[i].stream.game_name() or ""
-                            ),
-                            streamers_snapshot[i].username,
-                        )
-                        not in drop_progress_cooldowns
-                    )
-                ]
-
-                """
-                Twitch has a limit - you can't watch more than 2 channels at one time.
-                Take the configured number of streamers from the final list in priority order.
-                """
-                # Twitch counts watch time on up to two streams, but Drops progress
-                # applies to only one. The category safety net below reserves at
-                # most one selection for a discovered Drops stream.
-                max_watch_amount = streams_watched
-                streamers_watching = set()
-
-                default_source_priority = [
-                    StreamerSource.STREAMERS,
-                    StreamerSource.FOLLOWERS,
-                    StreamerSource.CATEGORIES,
-                    StreamerSource.BADGES,
-                    StreamerSource.WILDCARD_CATEGORIES,
-                ]
-                normalized_source_priority = []
-                for source in source_priority or default_source_priority:
-                    if (
-                        isinstance(source, StreamerSource)
-                        and source not in normalized_source_priority
-                    ):
-                        normalized_source_priority.append(source)
-                for source in default_source_priority:
-                    if source not in normalized_source_priority:
-                        normalized_source_priority.append(source)
-                source_priority = normalized_source_priority
-
-                def streamer_source(index):
-                    return discovery_source(streamers_snapshot[index], source_priority)
-
-                def remaining_watch_amount():
-                    return max_watch_amount - len(streamers_watching)
-
-                category_deadlines = getattr(self, "category_campaign_deadlines", {})
-
-                def category_expiration(index):
-                    game_slug = self.__slugify(
-                        streamers_snapshot[index].stream.game_name() or ""
-                    )
-                    return category_deadlines.get(game_slug, datetime.max)
-
-                indexes_by_source = {
-                    source: [
-                        index
-                        for index in streamers_index
-                        if streamer_source(index) == source
-                    ]
-                    for source in source_priority
-                }
-                # Category-discovered streams don't get a slot each in priority
-                # order like the other sources do (only one is ever watched at
-                # a time, below) - order them so whichever campaign is closest
-                # to expiring is always the one considered/selected first.
-                indexes_by_source[StreamerSource.CATEGORIES].sort(
-                    key=category_expiration
-                )
-                # Wildcard-discovered streams get the same soonest-expiring-first
-                # ordering as preferred categories, but as an independent tier --
-                # see the safety net below, which caps each tier at one watch
-                # slot per cycle separately so neither can crowd out the other.
-                indexes_by_source[StreamerSource.WILDCARD_CATEGORIES].sort(
-                    key=category_expiration
-                )
-
-                # Stickiness: a bare expiration sort hands the tier's watch
-                # slot to whichever campaign happens to be closest to expiring
-                # this cycle, so the watched campaign churns every time
-                # deadlines re-rank by a minute or the discovered channel set
-                # changes. When the previously picked streamer is still
-                # eligible and the best alternative is not more than the
-                # stickiness margin closer to expiring, move the previous pick
-                # to the front of the tier so it keeps the slot (0 disables
-                # the behavior).
-                stickiness_margin = timedelta(
-                    minutes=max(float(drop_pick_stickiness_minutes), 0)
-                )
-                previous_drop_pick = getattr(self, "last_drop_pick_streamer", None)
-
-                def _sticky_order(indexes):
-                    # Returns (indexes, sticky_held): sticky_held is True when
-                    # the previous pick was moved to the front by the margin
-                    # rule, so the final pick log can attribute the choice to
-                    # stickiness instead of plain expiration order. Works on a
-                    # copy: the caller's tier list must stay untouched.
-                    indexes = list(indexes)
-                    if (
-                        not indexes
-                        or stickiness_margin <= timedelta(0)
-                        or previous_drop_pick is None
-                    ):
-                        return indexes, False
-                    previous_index = next(
-                        (
-                            index
-                            for index in indexes
-                            if streamers_snapshot[index].username == previous_drop_pick
-                        ),
-                        None,
-                    )
-                    if previous_index is None:
-                        return indexes, False
-                    best_index = min(indexes, key=category_expiration)
-                    if best_index == previous_index:
-                        return indexes, False
-                    best_deadline = category_expiration(best_index)
-                    previous_deadline = category_expiration(previous_index)
-                    if (
-                        best_deadline < previous_deadline
-                        and (previous_deadline - best_deadline) > stickiness_margin
-                    ):
-                        # The alternative expires sooner by more than the
-                        # margin - let the expiration sort win.
-                        return indexes, False
-                    # The previous pick is at least as urgent (this also
-                    # covers both deadlines being unknown) - keep it.
-                    indexes.remove(previous_index)
-                    indexes.insert(0, previous_index)
-                    return indexes, True
-
-                def _stickiness_hold_reason(previous_index, best_index):
-                    return (
-                        "held by stickiness (margin "
-                        f"{stickiness_margin.total_seconds() / 60:.0f}m): "
-                        f"{streamers_snapshot[previous_index].username} kept "
-                        f"({_deadline_label(category_expiration(previous_index))} "
-                        "vs "
-                        f"{_deadline_label(category_expiration(best_index))} for "
-                        f"{streamers_snapshot[best_index].username})"
-                    )
-
-                def _deadline_label(deadline):
-                    if deadline == datetime.max:
-                        return "no known deadline"
-                    minutes = max((deadline - utc_now()).total_seconds() / 60, 0)
-                    return f"{minutes:.0f}m left"
-
-                (
-                    indexes_by_source[StreamerSource.CATEGORIES],
-                    category_sticky_held,
-                ) = _sticky_order(indexes_by_source[StreamerSource.CATEGORIES])
-                (
-                    indexes_by_source[StreamerSource.WILDCARD_CATEGORIES],
-                    wildcard_sticky_held,
-                ) = _sticky_order(indexes_by_source[StreamerSource.WILDCARD_CATEGORIES])
-
-                def _hold_reason(index, deadline, challenger_deadline):
-                    # Why the previously picked streamer must keep the slot:
-                    # its game still has an in-progress drop that can finish
-                    # before the campaign deadline. Returns None when there is
-                    # no such drop (or it can no longer complete in time).
-                    stream = getattr(streamers_snapshot[index], "stream", None)
-                    if stream is None:
-                        return None
-                    needs = self.__in_progress_drop_needs(
-                        self.__slugify(stream.game_name() or ""),
-                        streamers_snapshot[index].username,
-                    )
-                    if needs is None:
-                        return None
-                    needs_minutes, drop_name = needs
-                    if deadline == datetime.max:
-                        if challenger_deadline != datetime.max:
-                            # A real, known deadline on the challenger should
-                            # not lose to a hold with nothing to actually
-                            # measure feasibility against.
-                            return None
-                        return (
-                            f"holding in-progress drop '{drop_name}' "
-                            f"(needs {needs_minutes:.0f}m, no campaign deadline)"
-                        )
-                    minutes_to_deadline = max(
-                        (deadline - utc_now()).total_seconds() / 60, 0
-                    )
-                    if needs_minutes > minutes_to_deadline:
-                        return None
-                    return (
-                        f"holding in-progress drop '{drop_name}' "
-                        f"(needs {needs_minutes:.0f}m, campaign deadline in "
-                        f"{minutes_to_deadline:.0f}m)"
-                    )
-
-                def _prefer_sticky(candidates, best_index):
-                    # Same margin rule as _sticky_order, applied to the final
-                    # per-tier choice once the watch slots are allocated.
-                    if (
-                        not candidates
-                        or best_index is None
-                        or stickiness_margin <= timedelta(0)
-                    ):
-                        return best_index, None
-                    previous_index = next(
-                        (
-                            index
-                            for index in candidates
-                            if streamers_snapshot[index].username == previous_drop_pick
-                        ),
-                        None,
-                    )
-                    if previous_index is None or previous_index == best_index:
-                        return best_index, None
-                    best_deadline = category_expiration(best_index)
-                    previous_deadline = category_expiration(previous_index)
-                    if best_deadline >= previous_deadline:
-                        # The previous pick is at least as urgent (this also
-                        # covers both deadlines being unknown) - keep it.
-                        return previous_index, None
-                    if (previous_deadline - best_deadline) > stickiness_margin:
-                        # Normally the more urgent campaign wins - but a drop
-                        # that is still being farmed and can finish before its
-                        # deadline is worth more than switching to another
-                        # campaign and restarting its progress from zero.
-                        hold_reason = _hold_reason(
-                            previous_index, previous_deadline, best_deadline
-                        )
-                        if hold_reason is not None:
-                            return previous_index, hold_reason
-                        return best_index, None
-                    # The previous pick stays within the stickiness margin, so
-                    # it keeps the slot over the more urgent challenger - say
-                    # so, instead of falling back to the soonest-expiring text.
-                    return (
-                        previous_index,
-                        _stickiness_hold_reason(previous_index, best_index),
-                    )
-
-                for prior in priority:
-                    if remaining_watch_amount() <= 0:
-                        break
-
-                    for source in source_priority:
-                        if remaining_watch_amount() <= 0:
-                            break
-
-                        available_source_indexes = [
-                            index
-                            for index in indexes_by_source[source]
-                            if index not in streamers_watching
-                        ]
-
-                        if prior == Priority.ORDER:
-                            streamers_watching.update(
-                                available_source_indexes[: remaining_watch_amount()]
-                            )
-
-                        elif prior == Priority.FAVORITE:
-                            favorite_indexes = [
-                                index
-                                for index in available_source_indexes
-                                if streamers_snapshot[index].settings.favorite
-                            ]
-                            streamers_watching.update(
-                                favorite_indexes[: remaining_watch_amount()]
-                            )
-
-                        elif prior in [
-                            Priority.POINTS_ASCENDING,
-                            Priority.POINTS_DESCENDING,
-                        ]:
-                            items = [
-                                {
-                                    "points": streamers_snapshot[index].channel_points,
-                                    "index": index,
-                                }
-                                for index in available_source_indexes
-                            ]
-                            items = sorted(
-                                items,
-                                key=lambda x: x["points"],
-                                reverse=(prior == Priority.POINTS_DESCENDING),
-                            )
-                            streamers_watching.update(
-                                [item["index"] for item in items][
-                                    : remaining_watch_amount()
-                                ]
-                            )
-
-                        elif prior == Priority.STREAK:
-                            for index in available_source_indexes:
-                                if self._has_pending_watch_streak(
-                                    streamers_snapshot[index], now
-                                ):
-                                    streamers_watching.add(index)
-                                    if remaining_watch_amount() <= 0:
-                                        break
-
-                        elif prior == Priority.DROPS:
-                            for index in available_source_indexes:
-                                streamer = streamers_snapshot[index]
-                                if (
-                                    self.__drops_condition(streamer) is True
-                                    or self.__previous_pick_still_farming(streamer)
-                                    is True
-                                ):
-                                    streamers_watching.add(index)
-                                    if remaining_watch_amount() <= 0:
-                                        break
-
-                        elif prior == Priority.SUBSCRIBED:
-                            streamers_with_multiplier = [
-                                index
-                                for index in available_source_indexes
-                                if streamers_snapshot[
-                                    index
-                                ].viewer_has_points_multiplier()
-                            ]
-                            streamers_with_multiplier = sorted(
-                                streamers_with_multiplier,
-                                key=lambda x: streamers_snapshot[
-                                    x
-                                ].total_points_multiplier(),
-                                reverse=True,
-                            )
-                            streamers_watching.update(
-                                streamers_with_multiplier[: remaining_watch_amount()]
-                            )
-
-                source_rank = {
-                    source: rank for rank, source in enumerate(source_priority)
-                }
-                streamers_watching = sorted(
-                    streamers_watching,
-                    key=lambda index: (
-                        source_rank[streamer_source(index)],
-                        streamers_index.index(index),
-                    ),
-                )[:max_watch_amount]
-
-                # Tier membership (not the from_category/from_wildcard_category
-                # attributes alone) decides who can win the shared discovered
-                # slot below and who the later trim loop evicts - a
-                # BADGES-source streamer can also carry from_category=True, so
-                # an attribute-only check here let a badge stream win the slot
-                # and then evade the trim loop (which already used tier
-                # membership), silently dropping a genuine category/wildcard
-                # candidate for the whole cycle.
-                preferred_tier = set(indexes_by_source[StreamerSource.CATEGORIES])
-                wildcard_tier = set(
-                    indexes_by_source[StreamerSource.WILDCARD_CATEGORIES]
-                )
-
-                # Safety net: never watch more than one discovered ("not
-                # explicitly chosen by the user") Drops stream per cycle in
-                # total, across the preferred-category and wildcard-category
-                # tiers combined. Twitch only accrues Drops progress on one of
-                # the (up to two) watched streams regardless of source, so
-                # letting each tier keep its own slot would waste a slot that
-                # could otherwise go to an explicit/follower stream. When
-                # candidates exist in both tiers this cycle, the shared slot
-                # goes to whichever tier the user ranks higher in
-                # source_priority (see kept_discovered_index below) - only
-                # when just one tier has a candidate does that one get it
-                # unconditionally.
-
-                # Final choice per tier: min() by expiration, but keep the
-                # previously picked streamer while it is still within the
-                # stickiness margin (the tier ordering above already fronted
-                # it for slot allocation).
-                category_candidates = [
-                    index for index in streamers_watching if index in preferred_tier
-                ]
-                best_category_index = (
-                    min(category_candidates, key=category_expiration)
-                    if category_candidates
-                    else None
-                )
-                best_category_index, category_hold_reason = _prefer_sticky(
-                    category_candidates, best_category_index
-                )
-                if (
-                    category_hold_reason is None
-                    and category_sticky_held
-                    and best_category_index is not None
-                    and previous_drop_pick is not None
-                    and streamers_snapshot[best_category_index].username
-                    == previous_drop_pick
-                ):
-                    # The tier ordering fronted the previous pick (within the
-                    # stickiness margin) and it won the slot over the more
-                    # urgent tier minimum - attribute the choice correctly.
-                    tier_min_index = min(
-                        indexes_by_source[StreamerSource.CATEGORIES],
-                        key=category_expiration,
-                    )
-                    if best_category_index != tier_min_index:
-                        category_hold_reason = _stickiness_hold_reason(
-                            best_category_index, tier_min_index
-                        )
-                wildcard_category_candidates = [
-                    index for index in streamers_watching if index in wildcard_tier
-                ]
-                best_wildcard_category_index = (
-                    min(wildcard_category_candidates, key=category_expiration)
-                    if wildcard_category_candidates
-                    else None
-                )
-                best_wildcard_category_index, wildcard_hold_reason = _prefer_sticky(
-                    wildcard_category_candidates, best_wildcard_category_index
-                )
-                if (
-                    wildcard_hold_reason is None
-                    and wildcard_sticky_held
-                    and best_wildcard_category_index is not None
-                    and previous_drop_pick is not None
-                    and streamers_snapshot[best_wildcard_category_index].username
-                    == previous_drop_pick
-                ):
-                    tier_min_index = min(
-                        indexes_by_source[StreamerSource.WILDCARD_CATEGORIES],
-                        key=category_expiration,
-                    )
-                    if best_wildcard_category_index != tier_min_index:
-                        wildcard_hold_reason = _stickiness_hold_reason(
-                            best_wildcard_category_index, tier_min_index
-                        )
-                # The shared slot goes to whichever tier the user ranks higher
-                # in streamer_source_priority (CATEGORIES before
-                # WILDCARD_CATEGORIES by default) - not a hardcoded
-                # preference for categories, so a user who has deliberately
-                # reordered wildcard categories ahead of preferred ones gets
-                # that honored here too.
-                if best_category_index is None:
-                    kept_discovered_index = best_wildcard_category_index
-                elif best_wildcard_category_index is None:
-                    kept_discovered_index = best_category_index
-                elif (
-                    source_rank[StreamerSource.WILDCARD_CATEGORIES]
-                    < source_rank[StreamerSource.CATEGORIES]
-                ):
-                    kept_discovered_index = best_wildcard_category_index
-                else:
-                    kept_discovered_index = best_category_index
-
-                # Badge campaigns are time-based Drops campaigns too, and
-                # Twitch credits Drops progress to only one watched channel at
-                # a time - watching a badge stream next to the discovered
-                # category/wildcard Drops stream splits progress so neither
-                # campaign reliably advances. Keep whichever the user ranks
-                # higher in source_priority; the freed slot is backfilled with
-                # a non-discovered points stream below.
-                badge_tier = set(indexes_by_source[StreamerSource.BADGES])
-                kept_badge_index = next(
-                    (index for index in streamers_watching if index in badge_tier),
-                    None,
-                )
-                if kept_badge_index is not None and kept_discovered_index is not None:
-                    if (
-                        source_rank[StreamerSource.BADGES]
-                        < source_rank[streamer_source(kept_discovered_index)]
-                    ):
-                        kept_discovered_index = None
-                    else:
-                        kept_badge_index = None
-
-                # Category and badge discovery keep this channel in their
-                # results while it is live in its game, so a refresh cannot
-                # take the slot away from it (see __keep_drop_pick).
-                kept_pick_index = (
-                    kept_discovered_index
-                    if kept_discovered_index is not None
-                    else kept_badge_index
-                )
-                self.last_drop_pick_streamer = (
-                    streamers_snapshot[kept_pick_index].username
-                    if kept_pick_index is not None
-                    else None
-                )
-
-                # Only discovered category/wildcard tier members are trimmed
-                # here - membership in the tier lists (preferred_tier /
-                # wildcard_tier, defined above), not the from_category flag
-                # alone, since a BADGES-source streamer can also carry
-                # from_category=True.
-                # Badge-campaign streamers are capped at one watched stream
-                # (kept_badge_index, chosen above against the discovered Drops
-                # pick): badge discovery keeps adding a fresh live channel for
-                # the same campaign each refresh, so without a cap two channels
-                # for one badge campaign could fill both watch slots.
-                filtered_streamers_watching = []
-                for index in streamers_watching:
-                    if (
-                        index in preferred_tier or index in wildcard_tier
-                    ) and index != kept_discovered_index:
-                        continue
-                    if index in badge_tier and index != kept_badge_index:
-                        continue
-                    filtered_streamers_watching.append(index)
-
-                # Twitch credits Drops progress to only one watched channel at
-                # a time, whatever the source - a configured or followed
-                # streamer playing a Drops game competes with the discovered
-                # Drops pick just like a badge stream does. Keep the single
-                # Drops stream the user ranks highest in source_priority and
-                # evict the rest; their slots are backfilled with points-only
-                # streams below.
-                discovered_tiers = preferred_tier | wildcard_tier | badge_tier
-
-                # The helpers below are memoized per cycle: the same indexes
-                # are asked about repeatedly while the slots are settled.
-                @functools.lru_cache(maxsize=None)
-                def _is_drop_stream(index):
-                    return (
-                        index in discovered_tiers
-                        or self.__drops_condition(streamers_snapshot[index]) is True
-                    )
-
-                override_streamer_drops = (
-                    getattr(self, "category_drops_override_streamers", False) is True
-                )
-                configured_category_slugs = (
-                    getattr(self, "configured_category_slugs", None) or set()
-                )
-
-                def _streamer_drops_demoted(index):
-                    # category_drops_override_streamers: a configured or
-                    # followed streamer's Drops for a game outside the
-                    # configured category list rank below every discovered
-                    # Drops source.
-                    return (
-                        override_streamer_drops
-                        and streamer_source(index)
-                        in (StreamerSource.STREAMERS, StreamerSource.FOLLOWERS)
-                        and self.__slugify(
-                            streamers_snapshot[index].stream.game_name() or ""
-                        )
-                        not in configured_category_slugs
-                    )
-
-                def _drop_rank(index):
-                    rank = source_rank[streamer_source(index)]
-                    if _streamer_drops_demoted(index):
-                        rank += len(source_rank)
-                    return rank
-
-                def _watchable_campaigns(index):
-                    return [
-                        campaign
-                        for campaign in getattr(
-                            streamers_snapshot[index].stream, "campaigns", None
-                        )
-                        or []
-                        if campaign.has_watchable_drops()
-                    ]
-
-                @functools.lru_cache(maxsize=None)
-                def _drop_campaign_key(index):
-                    # The campaign IDs a stream would earn, or None when that
-                    # is unknown or any campaign is limited to listed
-                    # channels (sharing the game is not enough: per-channel
-                    # campaigns of one game are still separate campaigns).
-                    campaigns = _watchable_campaigns(index)
-                    if not campaigns or any(
-                        getattr(campaign, "channels", None) for campaign in campaigns
-                    ):
-                        return None
-                    return frozenset(campaign.id for campaign in campaigns)
-
-                drop_cover_revoked = getattr(self, "drop_cover_revoked", None) or set()
-                # The stall check is a covering stream's safety net: it needs
-                # stall detection on and the game's progress in the
-                # inventory, or an uncredited stream would hold the slot
-                # unnoticed.
-                cover_games = (
-                    set(getattr(self, "drop_inventory_progress", None) or {})
-                    if float(drop_progress_stall_minutes) > 0
-                    else set()
-                )
-
-                @functools.lru_cache(maxsize=None)
-                def _channel_earned_campaign_ids(index):
-                    # The campaigns a stream provably earns: ones Twitch's
-                    # channel query advertised for this broadcast (game-level
-                    # fallback IDs do not prove Drops are enabled on it).
-                    # Empty once Twitch failed to credit the stream while it
-                    # stood in for a discovered pick, or while the stall
-                    # check could not watch it.
-                    streamer = streamers_snapshot[index]
-                    game_slug = self.__slugify(streamer.stream.game_name() or "")
-                    if (
-                        game_slug not in cover_games
-                        or (
-                            game_slug,
-                            streamer.username,
-                            getattr(streamer.stream, "broadcast_id", None),
-                        )
-                        in drop_cover_revoked
-                    ):
-                        return frozenset()
-                    advertised = set(
-                        getattr(streamer.stream, "channel_campaign_ids", None) or []
-                    )
-                    return frozenset(
-                        campaign.id
-                        for campaign in _watchable_campaigns(index)
-                        if campaign.id in advertised
-                    )
-
-                def _covers_discovered(index, discovered_index):
-                    # A discovered (category/wildcard/badge) stream is only
-                    # watched to earn its campaigns. When a configured or
-                    # followed stream - which also earns the points the user
-                    # wants - provably earns every one of them, watching the
-                    # discovered stream as well adds nothing. A discovered key
-                    # is never None here, so it holds no channel-restricted
-                    # campaign. Cheapest checks first: this runs for every
-                    # online streamer while a discovered pick holds the slot,
-                    # and _is_drop_stream prunes badge campaigns as a side
-                    # effect.
-                    if (
-                        index in discovered_tiers
-                        or discovered_index not in discovered_tiers
-                    ):
-                        return False
-                    discovered_key = _drop_campaign_key(discovered_index)
-                    if discovered_key is None or _streamer_drops_demoted(index):
-                        return False
-                    if not _channel_earned_campaign_ids(index) >= discovered_key:
-                        return False
-                    return _is_drop_stream(index)
-
-                streak_priority = Priority.STREAK in priority
-
-                def _may_share_drop_slot(index, kept_index):
-                    # Two streams earning exactly the same unrestricted
-                    # campaigns cannot split progress, and a pending watch
-                    # streak (when the user prioritizes streaks) is only a
-                    # few minutes of overlap - both may stay watched.
-                    if streak_priority and index not in discovered_tiers:
-                        if self._has_pending_watch_streak(
-                            streamers_snapshot[index], now
-                        ):
-                            return True
-                    kept_key = _drop_campaign_key(kept_index)
-                    return kept_key is not None and kept_key == _drop_campaign_key(
-                        index
-                    )
-
-                drop_streams = [
-                    index
-                    for index in filtered_streamers_watching
-                    if _is_drop_stream(index)
-                ]
-                kept_drop_index = (
-                    min(drop_streams, key=_drop_rank) if drop_streams else None
-                )
-                # Hand a discovered Drops pick's slot to a configured or
-                # followed stream that covers it, whichever ranks higher and
-                # even when that stream missed the initial capped selection:
-                # it takes the discovered pick's place, so no other watched
-                # stream is displaced.
-                if kept_drop_index in discovered_tiers:
-                    watching = set(filtered_streamers_watching)
-                    # In streamers_index order, so min() breaks ties by it.
-                    covering = [
-                        index
-                        for index in streamers_index
-                        if _covers_discovered(index, kept_drop_index)
-                    ]
-                    if covering:
-                        replaced_discovered_index = kept_drop_index
-                        kept_drop_index = min(
-                            covering,
-                            key=lambda index: (
-                                index not in watching,
-                                _drop_rank(index),
-                            ),
-                        )
-                        if kept_drop_index not in watching:
-                            filtered_streamers_watching[
-                                filtered_streamers_watching.index(
-                                    replaced_discovered_index
-                                )
-                            ] = kept_drop_index
-                            drop_streams.append(kept_drop_index)
-                # Every discovered Drops stream the kept stream covers,
-                # including a pick it just replaced.
-                redundant = [
-                    index
-                    for index in drop_streams
-                    if _covers_discovered(kept_drop_index, index)
-                ]
-                conflicting = [
-                    index
-                    for index in drop_streams
-                    if index != kept_drop_index
-                    and index not in redundant
-                    and not _may_share_drop_slot(index, kept_drop_index)
-                ]
-                evicted = set(redundant) | set(conflicting)
-                filtered_streamers_watching = [
-                    index
-                    for index in filtered_streamers_watching
-                    if index not in evicted
-                ]
-                # A redundant pick stays the remembered pick, so stickiness
-                # and discovery keep the same verified channel for when the
-                # covering stream stops covering it.
-                if kept_pick_index in conflicting:
-                    self.last_drop_pick_streamer = None
-                covering_username = (
-                    streamers_snapshot[kept_drop_index].username if redundant else None
-                )
-                self.drop_slot_covering_streamer = covering_username
-
-                def _describe(indexes):
-                    return ", ".join(
-                        f"{streamers_snapshot[index].username} "
-                        f"({streamer_source(index).name.lower()})"
-                        for index in indexes
-                    )
-
-                drop_conflict_parts = []
-                if redundant:
-                    drop_conflict_parts.append(
-                        f"{_describe([kept_drop_index])} already earns the same "
-                        "Drops campaign(s) as the discovered Drops pick: "
-                        f"skipping {_describe(redundant)}"
-                    )
-                if conflicting:
-                    drop_conflict_parts.append(
-                        "Drops progress only counts on one channel at a time: "
-                        f"keeping {_describe([kept_drop_index])}, "
-                        f"skipping {_describe(conflicting)}"
-                    )
-                # Discovery can offer a different channel for the same game
-                # on each refresh; the redundant channels it offers are left
-                # out of the key so the same decision is logged only once.
-                drop_conflict_key = (
-                    (
-                        bool(redundant),
-                        streamers_snapshot[kept_drop_index].username,
-                        tuple(
-                            streamers_snapshot[index].username for index in conflicting
-                        ),
-                    )
-                    if drop_conflict_parts
-                    else None
-                )
-                if drop_conflict_key != getattr(self, "last_drop_conflict_key", None):
-                    self.last_drop_conflict_key = drop_conflict_key
-                    if drop_conflict_parts:
-                        logger.info(
-                            "; ".join(drop_conflict_parts),
-                            extra={"emoji": ":dart:"},
-                        )
-
-                # Use any freed slot for a points-only stream - never another
-                # discovered stream, and never a second Drops stream unless it
-                # may share the Drops slot with the kept one.
-                for index in streamers_index:
-                    if len(filtered_streamers_watching) >= max_watch_amount:
-                        break
-                    if index in filtered_streamers_watching:
-                        continue
-                    if index in discovered_tiers:
-                        continue
-                    if _is_drop_stream(index):
-                        if kept_drop_index is None:
-                            kept_drop_index = index
-                        elif not _may_share_drop_slot(index, kept_drop_index):
-                            continue
-                    filtered_streamers_watching.append(index)
-                streamers_watching = filtered_streamers_watching
-
-                # Log the category/wildcard picks only now that every slot
-                # decision is final - a badge or higher-ranked Drops stream can
-                # evict the discovered pick after it was chosen, and reporting
-                # it as watched would be wrong (and would suppress the "no
-                # watch slot free" message on later cycles).
-                final_watched = set(streamers_watching)
-                self.__log_category_drop_pick(
-                    streamers_snapshot,
-                    (
-                        best_category_index
-                        if best_category_index in final_watched
-                        else None
-                    ),
-                    indexes_by_source[StreamerSource.CATEGORIES],
-                    category_expiration,
-                    reason=category_hold_reason,
-                    slotted_candidates=category_candidates,
-                    covered_by=(
-                        covering_username if best_category_index in redundant else None
-                    ),
-                )
-                self.__log_category_drop_pick(
-                    streamers_snapshot,
-                    (
-                        best_wildcard_category_index
-                        if best_wildcard_category_index in final_watched
-                        else None
-                    ),
-                    indexes_by_source[StreamerSource.WILDCARD_CATEGORIES],
-                    category_expiration,
-                    label="wildcard category",
-                    state_attr="last_wildcard_category_drop_selection",
-                    reason=wildcard_hold_reason,
-                    slotted_candidates=wildcard_category_candidates,
-                    covered_by=(
-                        covering_username
-                        if best_wildcard_category_index in redundant
-                        else None
-                    ),
-                )
-
-                watched_indexes = set(streamers_watching)
-                for index, streamer in enumerate(streamers_snapshot):
-                    streamer.is_watching = index in watched_indexes
-
-                self._forget_idle_stream_segment_watchers()
-
-                self.__save_now_watching_analytics(
-                    streamers_snapshot, streamers_watching, streamer_source
-                )
-
-                self.__log_watched_streamers(
-                    streamers_snapshot,
-                    streamers_watching,
-                    streamer_source,
-                    is_drop_stream=_is_drop_stream,
-                    interval_minutes=watch_status_interval_minutes,
-                )
-
-                # Segment requests are what earn Drop progress now, so start
-                # every watched stream's (background) poll before the
-                # minute-watched requests: an unexpected error there aborts
-                # the rest of this cycle and must not skip them.
-                for index in streamers_watching:
-                    self._poll_stream_segments(
-                        streamers_snapshot[index], _is_drop_stream(index)
-                    )
-
-                for index in streamers_watching:
-                    # next_iteration = time.time() + 60 / len(streamers_watching)
-                    next_iteration = time.time() + 20 / len(streamers_watching)
-
-                    try:
-                        streamer = streamers_snapshot[index]
-                        if streamer.stream.spade_url is None:
-                            # Posting to a None URL raises MissingSchema, which
-                            # would abort this loop for every later streamer.
-                            # check_streamer_online() retries the extraction.
-                            logger.warning(
-                                f"Skipping minute watched for {streamer}: spade URL not loaded yet"
-                            )
-                            self.__chuncked_sleep(
-                                next_iteration - time.time(), chunk_size=chunk_size
-                            )
-                            continue
-                        for attempt in range(2):
-                            try:
-                                response = requests.post(
-                                    streamer.stream.spade_url,
-                                    data=streamer.stream.encode_payload(),
-                                    headers={"User-Agent": self.user_agent},
-                                    # timeout=60,
-                                    timeout=20,
-                                )
-                                break
-                            except requests.exceptions.ConnectionError as e:
-                                if attempt == 0:
-                                    logger.warning(
-                                        f"Connection error sending minute watched for {streamer}, retrying once: {e}"
-                                    )
-                                    continue
-                                raise
-                        logger.debug(
-                            f"Send minute watched request for {streamer} - Status code: {response.status_code}"
-                        )
-                        if response.status_code == 204:
-                            streamer.stream.update_minute_watched()
-
-                            """
-                            Remember, you can only earn progress towards a time-based Drop on one participating channel at a time.  [ ! ! ! ]
-                            You can also check your progress towards Drops within a campaign anytime by viewing the Drops Inventory.
-                            For time-based Drops, if you are unable to claim the Drop in time, you will be able to claim it from the inventory page until the Drops campaign ends.
-                            """
-
-                            for campaign in streamer.stream.campaigns:
-                                for drop in campaign.drops:
-                                    if (
-                                        drop.has_preconditions_met is not False
-                                        and drop.is_claimed is False
-                                        and drop.current_minutes_watched > 0
-                                    ):
-                                        progress_key = drop.id
-                                        last_saved_minutes = (
-                                            self.drop_progress_last_saved.get(
-                                                progress_key,
-                                                -1,
-                                            )
-                                        )
-                                        if (
-                                            drop.current_minutes_watched
-                                            > last_saved_minutes
-                                        ):
-                                            self.drop_progress_last_saved[
-                                                progress_key
-                                            ] = drop.current_minutes_watched
-                                            self.__save_drop_progress_analytics(
-                                                drop,
-                                                campaign=campaign,
-                                                streamer_username=streamer.username,
-                                            )
-                                            if (
-                                                last_saved_minutes
-                                                < drop.minutes_required
-                                                and drop.current_minutes_watched
-                                                >= drop.minutes_required
-                                            ):
-                                                self.__claim_completed_drop_promptly(
-                                                    drop,
-                                                    campaign,
-                                                )
-
-                                    # We could add .has_preconditions_met condition inside is_printable
-                                    if (
-                                        drop.has_preconditions_met is not False
-                                        and drop.is_printable is True
-                                    ):
-                                        drop_messages = [
-                                            f"{streamer} is streaming {streamer.stream}",
-                                            f"Campaign: {campaign}",
-                                            f"Drop: {drop}",
-                                            f"{drop.progress_bar()}",
-                                        ]
-                                        for single_line in drop_messages:
-                                            logger.info(
-                                                single_line,
-                                                extra={
-                                                    "event": Events.DROP_STATUS,
-                                                    **SKIP_NOTIFICATIONS,
-                                                },
-                                            )
-
-                                        # One summary for notifiers instead of
-                                        # a notification per console line.
-                                        logger.info(
-                                            "\n".join(drop_messages),
-                                            extra={
-                                                "event": Events.DROP_STATUS,
-                                                "notification_only": True,
-                                            },
-                                        )
-
-                    except requests.exceptions.ConnectionError as e:
-                        logger.error(f"Error while trying to send minute watched: {e}")
-                        self.__check_connection_handler(chunk_size)
-                    except requests.exceptions.Timeout as e:
-                        logger.error(f"Error while trying to send minute watched: {e}")
-
-                    self.__chuncked_sleep(
-                        next_iteration - time.time(), chunk_size=chunk_size
-                    )
-
-                if streamers_watching == []:
-                    # self.__chuncked_sleep(60, chunk_size=chunk_size)
-                    self.__chuncked_sleep(20, chunk_size=chunk_size)
             except Exception:
                 logger.error("Exception raised in send minute watched", exc_info=True)
             finally:
-                # Early failures use ``continue`` and skip the per-stream sleep.
+                # A pass that fails early skips the per-stream sleep.
                 # Keep the watcher from hammering Twitch when an upstream request
                 # or persisted query fails.
                 self.__chuncked_sleep(
                     20 - (time.time() - iteration_started_at),
                     chunk_size=chunk_size,
                 )
+
+    def __send_minute_watched_pass(
+        self,
+        streamers,
+        priority,
+        chunk_size,
+        streams_watched,
+        source_priority,
+        drop_progress_stall_minutes,
+        drop_pick_stickiness_minutes,
+        watch_status_interval_minutes,
+        spade_url_warned=None,
+    ):
+        """One pass of send_minute_watched_events(): pick the streams to
+        watch, send their minute-watched events and claim what they earned.
+        The caller owns the loop, the error handling and the pacing sleep
+        (#280)."""
+        if spade_url_warned is None:
+            # The loop passes its own set so warnings stay quiet across passes.
+            spade_url_warned = set()
+        now = time.time()
+        # Snapshot the shared streamers list once per iteration - it can be
+        # reassigned in-place (self.streamers[:] = ...) from other threads
+        # (config reload / category reconciliation), and indexing into a
+        # list that shrinks mid-iteration raises IndexError.
+        streamers_snapshot = list(streamers)
+        drop_progress_cooldowns = self.__drop_progress_streamer_cooldowns(
+            streamers_snapshot,
+            now,
+            max(float(drop_progress_stall_minutes), 0) * 60,
+        )
+        # Refresh eligibility for every online streamer before filtering
+        # streamers_index below - a category streamer excluded here for a
+        # stale/negative __drops_condition result would otherwise never be
+        # passed to check_streamer_online again (that used to only run for
+        # streamers already in streamers_index), leaving a flaky negative
+        # cached until the next full category refresh (minutes later).
+        # Category streams use a tighter 2-minute gate matching the
+        # underlying Stream.update_required() granularity, so a false
+        # negative self-heals quickly instead of waiting up to 10 minutes.
+        for i in range(0, len(streamers_snapshot)):
+            if streamers_snapshot[i].is_online is not True:
+                continue
+            stale_after_seconds = (
+                120 if is_drop_discovered(streamers_snapshot[i]) else 600
+            )
+            if streamers_snapshot[i].stream.update_elapsed() >= stale_after_seconds:
+                # The last stream/eligibility update is older than the
+                # staleness window for this streamer's source - refresh it
+                # now instead of watching it drift further out of date.
+                self.check_streamer_online(streamers_snapshot[i])
+
+        selection = StreamSelector(
+            drops_condition=self.__drops_condition,
+            previous_pick_still_farming=self.__previous_pick_still_farming,
+            has_reached_points_limit=self._has_reached_points_limit,
+            has_pending_watch_streak=self._has_pending_watch_streak,
+            in_progress_drop_needs=self.__in_progress_drop_needs,
+            slugify=self.__slugify,
+            previous_drop_pick=getattr(self, "last_drop_pick_streamer", None),
+            category_deadlines=getattr(self, "category_campaign_deadlines", {}),
+            category_drops_override_streamers=(
+                getattr(self, "category_drops_override_streamers", False) is True
+            ),
+            configured_category_slugs=getattr(self, "configured_category_slugs", None),
+            drop_cover_revoked=getattr(self, "drop_cover_revoked", None),
+            drop_inventory_progress=getattr(self, "drop_inventory_progress", None),
+        ).select(
+            streamers_snapshot,
+            now,
+            priority,
+            streams_watched,
+            source_priority=source_priority,
+            drop_progress_stall_minutes=drop_progress_stall_minutes,
+            drop_pick_stickiness_minutes=drop_pick_stickiness_minutes,
+            drop_progress_cooldowns=drop_progress_cooldowns,
+        )
+        self.last_drop_pick_streamer = selection.drop_pick_streamer
+        self.drop_slot_covering_streamer = selection.drop_slot_covering_streamer
+        # Discovery can offer a different channel for the same game on each
+        # refresh, so the same conflict is logged only once.
+        if selection.drop_conflict_key != getattr(self, "last_drop_conflict_key", None):
+            self.last_drop_conflict_key = selection.drop_conflict_key
+            if selection.drop_conflict_message:
+                logger.info(
+                    selection.drop_conflict_message,
+                    extra={"emoji": ":dart:"},
+                )
+        streamers_watching = selection.watching
+        streamer_source = selection.streamer_source
+        _is_drop_stream = selection.is_drop_stream
+
+        # Log the category/wildcard picks only now that every slot
+        # decision is final; reporting an evicted pick as watched would be
+        # wrong (and would suppress the "no watch slot free" message on
+        # later cycles).
+        self.__log_category_drop_pick(
+            streamers_snapshot,
+            selection.category.watched_pick,
+            selection.category.ordered,
+            selection.category_expiration,
+            reason=selection.category.reason,
+            slotted_candidates=selection.category.slotted_candidates,
+            covered_by=selection.category.covered_by,
+        )
+        self.__log_category_drop_pick(
+            streamers_snapshot,
+            selection.wildcard.watched_pick,
+            selection.wildcard.ordered,
+            selection.category_expiration,
+            label="wildcard category",
+            state_attr="last_wildcard_category_drop_selection",
+            reason=selection.wildcard.reason,
+            slotted_candidates=selection.wildcard.slotted_candidates,
+            covered_by=selection.wildcard.covered_by,
+        )
+
+        watched_indexes = set(streamers_watching)
+        for index, streamer in enumerate(streamers_snapshot):
+            streamer.is_watching = index in watched_indexes
+
+        self._forget_idle_stream_segment_watchers()
+
+        self.__drop_analytics().save_now_watching(
+            streamers_snapshot, streamers_watching, streamer_source
+        )
+
+        self.__log_watched_streamers(
+            streamers_snapshot,
+            streamers_watching,
+            streamer_source,
+            is_drop_stream=_is_drop_stream,
+            interval_minutes=watch_status_interval_minutes,
+        )
+
+        # Segment requests are what earn Drop progress now, so start
+        # every watched stream's (background) poll before the
+        # minute-watched requests: an unexpected error there aborts
+        # the rest of this cycle and must not skip them.
+        for index in streamers_watching:
+            self._poll_stream_segments(
+                streamers_snapshot[index], _is_drop_stream(index)
+            )
+
+        for index in streamers_watching:
+            # next_iteration = time.time() + 60 / len(streamers_watching)
+            next_iteration = time.time() + 20 / len(streamers_watching)
+
+            try:
+                streamer = streamers_snapshot[index]
+                if streamer.stream.spade_url is None:
+                    # Posting to a None URL raises MissingSchema, which
+                    # would abort this loop for every later streamer.
+                    # check_streamer_online() retries the extraction.
+                    message = f"Skipping minute watched for {streamer}: spade URL not loaded yet"
+                    if streamer.username in spade_url_warned:
+                        logger.debug(message)
+                    else:
+                        spade_url_warned.add(streamer.username)
+                        logger.warning(message)
+                    self.__chuncked_sleep(
+                        next_iteration - time.time(), chunk_size=chunk_size
+                    )
+                    continue
+                spade_url_warned.discard(streamer.username)
+                for attempt in range(2):
+                    try:
+                        response = requests.post(
+                            streamer.stream.spade_url,
+                            data=streamer.stream.encode_payload(),
+                            headers={"User-Agent": self.user_agent},
+                            # timeout=60,
+                            timeout=20,
+                        )
+                        break
+                    except requests.exceptions.ConnectionError as e:
+                        if attempt == 0:
+                            logger.warning(
+                                f"Connection error sending minute watched for {streamer}, retrying once: {e}"
+                            )
+                            continue
+                        raise
+                logger.debug(
+                    f"Send minute watched request for {streamer} - Status code: {response.status_code}"
+                )
+                if response.status_code == 204:
+                    streamer.stream.update_minute_watched()
+
+                    """
+                    Remember, you can only earn progress towards a time-based Drop on one participating channel at a time.  [ ! ! ! ]
+                    You can also check your progress towards Drops within a campaign anytime by viewing the Drops Inventory.
+                    For time-based Drops, if you are unable to claim the Drop in time, you will be able to claim it from the inventory page until the Drops campaign ends.
+                    """
+
+                    for campaign in streamer.stream.campaigns:
+                        for drop in campaign.drops:
+                            if (
+                                drop.has_preconditions_met is not False
+                                and drop.is_claimed is False
+                                and drop.current_minutes_watched > 0
+                            ):
+                                progress_key = drop.id
+                                last_saved_minutes = self.drop_progress_last_saved.get(
+                                    progress_key,
+                                    -1,
+                                )
+                                if drop.current_minutes_watched > last_saved_minutes:
+                                    self.drop_progress_last_saved[progress_key] = (
+                                        drop.current_minutes_watched
+                                    )
+                                    self.__drop_analytics().save_drop_progress(
+                                        drop,
+                                        campaign=campaign,
+                                        streamer_username=streamer.username,
+                                    )
+                                    if (
+                                        last_saved_minutes < drop.minutes_required
+                                        and drop.current_minutes_watched
+                                        >= drop.minutes_required
+                                    ):
+                                        self.__claim_completed_drop_promptly(
+                                            drop,
+                                            campaign,
+                                        )
+
+                            # We could add .has_preconditions_met condition inside is_printable
+                            if (
+                                drop.has_preconditions_met is not False
+                                and drop.is_printable is True
+                            ):
+                                drop_messages = [
+                                    f"{streamer} is streaming {streamer.stream}",
+                                    f"Campaign: {campaign}",
+                                    f"Drop: {drop}",
+                                    f"{drop.progress_bar()}",
+                                ]
+                                for single_line in drop_messages:
+                                    logger.info(
+                                        single_line,
+                                        extra={
+                                            "event": Events.DROP_STATUS,
+                                            **SKIP_NOTIFICATIONS,
+                                        },
+                                    )
+
+                                # One summary for notifiers instead of
+                                # a notification per console line.
+                                logger.info(
+                                    "\n".join(drop_messages),
+                                    extra={
+                                        "event": Events.DROP_STATUS,
+                                        "notification_only": True,
+                                    },
+                                )
+
+            except requests.exceptions.ConnectionError as e:
+                logger.error(f"Error while trying to send minute watched: {e}")
+                self.__check_connection_handler(chunk_size)
+            except requests.exceptions.Timeout as e:
+                logger.error(f"Error while trying to send minute watched: {e}")
+
+            self.__chuncked_sleep(next_iteration - time.time(), chunk_size=chunk_size)
+
+        if streamers_watching == []:
+            # self.__chuncked_sleep(60, chunk_size=chunk_size)
+            self.__chuncked_sleep(20, chunk_size=chunk_size)
 
     # === CHANNEL POINTS / PREDICTION === #
     # Load the amount of current points for a channel, check if a bonus is available
@@ -8008,9 +6843,7 @@ class Twitch(object):
                 if cache_key:
                     self.awarded_game_event_drops[str(cache_key)] = awarded_drop
             self.__cache_drop_inventory_progress(inventory)
-            self.completed_drop_campaigns.update(
-                self.__completed_campaign_ids_from_inventory(inventory)
-            )
+            self.__merge_completed_drop_campaigns(inventory)
             # Sync and startup inventory reads also observe completions. Keep
             # their evidence even if the next discovery-specific fetch fails.
             self.__record_completed_badge_campaigns(inventory)
@@ -8057,16 +6890,52 @@ class Twitch(object):
         # Android login (#228). The TV login gets that reply every time,
         # because Twitch withholds the list from it, so there it still counts
         # as loaded: treating it as down would keep the dashboard outage
-        # handling on for the whole run.
+        # handling on for the whole run. Android may start getting the same
+        # reply, so those replies are counted in a streak: the first one is
+        # an ERROR, and once the streak reaches DROPS_DASHBOARD_WITHHELD_LIMIT
+        # the list counts as withheld and loaded, with one warning. A reply
+        # with a list resets the streak. Request failures and replies with
+        # errors are not counted.
+        android_withheld = (
+            not request_failed
+            and isinstance(current_user, dict)
+            and current_user.get("dropCampaigns") is None
+            and not response.get("errors")
+            and self.__client_id() == ANDROID_CLIENT_ID
+        )
+        if (
+            isinstance(current_user, dict)
+            and current_user.get("dropCampaigns") is not None
+        ):
+            self.drops_dashboard_withheld_streak = 0
+        elif android_withheld:
+            self.drops_dashboard_withheld_streak = (
+                getattr(self, "drops_dashboard_withheld_streak", 0) + 1
+            )
+        withheld_streak = getattr(self, "drops_dashboard_withheld_streak", 0)
         unavailable = not isinstance(current_user, dict) or (
             current_user.get("dropCampaigns") is None
             and bool(response.get("errors") or self.__client_id() == ANDROID_CLIENT_ID)
         )
+        if android_withheld:
+            unavailable = withheld_streak < DROPS_DASHBOARD_WITHHELD_LIMIT
         if unavailable and not request_failed:
             errors = response.get("errors") if isinstance(response, dict) else None
-            logger.error(
+            message = (
                 "Unable to load drops dashboard: the response carried no "
                 f"campaign data (errors: {errors})"
+            )
+            if android_withheld and withheld_streak > 1:
+                self.__log_drop_check(message, level=logging.DEBUG)
+            else:
+                logger.error(message)
+        if android_withheld and withheld_streak == DROPS_DASHBOARD_WITHHELD_LIMIT:
+            logger.warning(
+                "Twitch has withheld the Drops campaign list from the Android "
+                f"app login for {withheld_streak} refreshes in a row, so it is "
+                "treated as empty. Drop campaigns come from your inventory, the "
+                "channels' listed campaigns and the shared Drops gist instead.",
+                extra={"emoji": ":warning:"},
             )
         _drops_dashboard_state.unavailable = unavailable
         if not isinstance(data, dict):
@@ -8635,7 +7504,7 @@ class Twitch(object):
                             except (KeyError, TypeError, ValueError):
                                 pass
 
-                    self.__save_drop_snapshot_from_dict(
+                    self.__drop_analytics().save_snapshot_from_dict(
                         drop_dict,
                         campaign=campaign_ref,
                         streamer_username=None,
@@ -8645,328 +7514,6 @@ class Twitch(object):
         self.__remove_ineligible_badge_drops(campaigns)
         return campaigns
 
-    @staticmethod
-    def __drop_report_identity_key(entry):
-        # Mirrors the dedup key in assets/script.js (dashboard rendering): the
-        # same drop_id can be recorded under different item_name values across
-        # its lifecycle (a friendly display name while actively watched vs. a
-        # shorter internal name from the periodic full-inventory sync), so a
-        # composite key including item_name let a completed drop's "captured"
-        # snapshot land under a different key than its earlier "in_progress"
-        # snapshot - leaving a stale ghost row that never collapsed. Key on
-        # drop_id alone when available; fall back to the old composite key
-        # only when drop_id itself is missing.
-        drop_id = str(entry.get("drop_id") or "")
-        category = str(entry.get("category") or "") or "unknown"
-        if drop_id:
-            return "|".join(["id", drop_id, category])
-        return "|".join(
-            [
-                "",
-                str(entry.get("item_art_url") or ""),
-                str(entry.get("item_name") or "") or "unknown",
-                str(entry.get("campaign") or "") or "unknown",
-                category,
-            ]
-        )
-
-    def __save_now_watching_analytics(
-        self, streamers_snapshot, streamers_watching, streamer_source
-    ):
-        if getattr(Settings, "enable_analytics", False) is not True:
-            return
-
-        entries = []
-        for index in streamers_watching:
-            streamer = streamers_snapshot[index]
-            source = streamer_source(index)
-            if source == StreamerSource.BADGES:
-                reason = "badge"
-            elif source in (
-                StreamerSource.CATEGORIES,
-                StreamerSource.WILDCARD_CATEGORIES,
-            ):
-                reason = "drops"
-            else:
-                reason = "points"
-
-            game = streamer.stream.game or {}
-            game_name = (game.get("displayName") or game.get("name")) if game else None
-
-            entries.append(
-                {
-                    "username": streamer.username,
-                    "reason": reason,
-                    "game": game_name,
-                    "channel_points": streamer.channel_points,
-                }
-            )
-
-        analytics_file = os.path.join(Settings.analytics_path, "now_watching.json")
-        temp_file = analytics_file + ".temp"
-
-        with self.analytics_mutex:
-            with open(temp_file, "w", encoding="utf-8") as temp_handle:
-                json.dump(entries, temp_handle, indent=4)
-            os.replace(temp_file, analytics_file)
-
-    def __save_drop_claim_analytics(
-        self,
-        drop,
-        campaign=None,
-        streamer_username=None,
-        status="captured",
-        campaign_name_override=None,
-        category_name_override=None,
-        status_override=None,
-        item_name_override=None,
-        benefit_override=None,
-        item_art_url_override=None,
-    ):
-        category_name = category_name_override or "Unknown"
-        campaign_name = campaign_name_override
-        if campaign is not None:
-            campaign_name = campaign_name or campaign.name
-            game = campaign.game or {}
-            category_name = (
-                category_name_override
-                or game.get("displayName")
-                or game.get("name")
-                or "Unknown"
-            )
-
-        # Ignore uncategorized drop entries to keep category views clean.
-        if category_name == "Unknown":
-            return
-
-        payload = {
-            "x": round(time.time() * 1000),
-            "datetime": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-            "category": category_name,
-            "campaign": campaign_name,
-            "item_name": item_name_override or drop.name,
-            "benefit": benefit_override or drop.benefit,
-            "streamer": streamer_username,
-            "drop_id": drop.id,
-            "status": status_override or status,
-            "current_minutes_watched": min(
-                drop.current_minutes_watched, drop.minutes_required
-            ),
-            "minutes_required": drop.minutes_required,
-            "percentage_progress": min(100, drop.percentage_progress),
-            "drop_end_at": (
-                drop.end_at.strftime("%Y-%m-%dT%H:%M:%SZ")
-                if getattr(drop, "end_at", None) is not None
-                else None
-            ),
-            "failed_to_achieve": (
-                status != "captured"
-                and getattr(drop, "end_at", None) is not None
-                and utc_now() > drop.end_at
-                and drop.current_minutes_watched < drop.minutes_required
-            ),
-            "item_art_url": (
-                item_art_url_override
-                if item_art_url_override is not None
-                and self.track_drop_item_art is True
-                else (drop.item_art_url if self.track_drop_item_art is True else None)
-            ),
-        }
-
-        report_key = self.__drop_report_identity_key(payload)
-        with self.analytics_mutex:
-            self.drop_report_state[report_key] = payload.copy()
-
-        if Settings.enable_analytics is not True:
-            return
-
-        analytics_file = os.path.join(Settings.analytics_path, "drops_by_category.json")
-        temp_file = analytics_file + ".temp"
-
-        with self.analytics_mutex:
-            with open(temp_file, "w", encoding="utf-8") as temp_handle:
-                data = {}
-                if os.path.isfile(analytics_file):
-                    with open(analytics_file, "r", encoding="utf-8") as current:
-                        try:
-                            data = json.load(current)
-                        except json.JSONDecodeError:
-                            data = {}
-
-                if "drops" not in data:
-                    data["drops"] = []
-                data["version"] = ANALYTICS_DATA_VERSION
-
-                compacted = {}
-                for item in data["drops"]:
-                    identity_key = self.__drop_report_identity_key(item)
-                    previous = compacted.get(identity_key)
-                    if previous is None or (item.get("x") or 0) >= (
-                        previous.get("x") or 0
-                    ):
-                        compacted[identity_key] = item
-
-                data["drops"] = list(compacted.values())
-
-                payload_identity_key = self.__drop_report_identity_key(payload)
-                identity_index = next(
-                    (
-                        i
-                        for i, item in enumerate(data["drops"])
-                        if self.__drop_report_identity_key(item) == payload_identity_key
-                    ),
-                    None,
-                )
-
-                if identity_index is None:
-                    data["drops"].append(payload)
-                else:
-                    data["drops"][identity_index] = payload
-
-                json.dump(data, temp_handle, indent=4)
-
-            os.replace(temp_file, analytics_file)
-
-    def drop_report_snapshot(self):
-        """Return the latest structured drop state tracked by this session."""
-        with self.analytics_mutex:
-            return {
-                tracking_key: payload.copy()
-                for tracking_key, payload in self.drop_report_state.items()
-            }
-
-    def restore_drop_report_state(self, snapshot):
-        """Seed the drop state from a previous session without overriding newer entries."""
-        if not isinstance(snapshot, dict):
-            return
-        with self.analytics_mutex:
-            for tracking_key, payload in snapshot.items():
-                if isinstance(payload, dict):
-                    self.drop_report_state.setdefault(tracking_key, payload.copy())
-
-    def __save_drop_progress_analytics(
-        self,
-        drop,
-        campaign=None,
-        streamer_username=None,
-        campaign_name_override=None,
-        category_name_override=None,
-        status_override=None,
-        item_name_override=None,
-        benefit_override=None,
-        item_art_url_override=None,
-    ):
-        self.__save_drop_claim_analytics(
-            drop,
-            campaign=campaign,
-            streamer_username=streamer_username,
-            status="in_progress",
-            campaign_name_override=campaign_name_override,
-            category_name_override=category_name_override,
-            status_override=status_override,
-            item_name_override=item_name_override,
-            benefit_override=benefit_override,
-            item_art_url_override=item_art_url_override,
-        )
-
-    def __reconcile_awarded_game_event_drops(self, inventory):
-        if Settings.enable_analytics is not True:
-            return 0
-
-        if not isinstance(inventory, dict):
-            return 0
-
-        rewards = inventory.get("gameEventDrops") or []
-        if not isinstance(rewards, list) or rewards == []:
-            return 0
-
-        awarded_by_name = {}
-        for reward in rewards:
-            if not isinstance(reward, dict):
-                continue
-            if reward.get("lastAwardedAt") in [None, ""]:
-                continue
-
-            reward_name = reward.get("name")
-            if reward_name in [None, ""]:
-                continue
-
-            reward_image = reward.get("imageURL")
-            if reward_name not in awarded_by_name:
-                awarded_by_name[reward_name] = set()
-            if reward_image not in [None, ""]:
-                awarded_by_name[reward_name].add(reward_image)
-
-        if awarded_by_name == {}:
-            return 0
-
-        analytics_file = os.path.join(Settings.analytics_path, "drops_by_category.json")
-        if os.path.isfile(analytics_file) is False:
-            return 0
-
-        temp_file = analytics_file + ".temp"
-        now_ms = round(time.time() * 1000)
-        now_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        updated = 0
-
-        with self.analytics_mutex:
-            with open(analytics_file, "r", encoding="utf-8") as current:
-                try:
-                    data = json.load(current)
-                except json.JSONDecodeError:
-                    data = {}
-
-            drops = data.get("drops")
-            if not isinstance(drops, list):
-                drops = []
-
-            for item in drops:
-                if not isinstance(item, dict):
-                    continue
-                if item.get("status") == "captured":
-                    continue
-
-                item_name = item.get("item_name")
-                if item_name not in awarded_by_name:
-                    continue
-
-                known_images = awarded_by_name.get(item_name, set())
-                item_art_url = item.get("item_art_url")
-                if (
-                    known_images
-                    and item_art_url not in [None, ""]
-                    and item_art_url not in known_images
-                ):
-                    continue
-
-                item["status"] = "captured"
-                item["failed_to_achieve"] = False
-                item["x"] = now_ms
-                item["datetime"] = now_dt
-
-                minutes_required = item.get("minutes_required") or 0
-                current_minutes = item.get("current_minutes_watched") or 0
-                item["current_minutes_watched"] = max(current_minutes, minutes_required)
-
-                percentage_progress = item.get("percentage_progress") or 0
-                item["percentage_progress"] = max(percentage_progress, 100)
-                updated += 1
-
-            data["drops"] = drops
-            data["version"] = ANALYTICS_DATA_VERSION
-
-            with open(temp_file, "w", encoding="utf-8") as temp_handle:
-                json.dump(data, temp_handle, indent=4)
-
-            os.replace(temp_file, analytics_file)
-
-        if updated > 0:
-            self.__log_drop_check(
-                f"reconciled {updated} analytics entries from awarded gameEventDrops"
-            )
-
-        return updated
-
     def __claim_lock(self):
         # Defensive getattr: some tests construct Twitch via __new__ and skip
         # __init__ (mirroring __eligibility_lock).
@@ -8975,6 +7522,32 @@ class Twitch(object):
             lock = Lock()
             self.claim_drop_lock = lock
         return lock
+
+    def __drop_analytics(self):
+        """The analytics writer for this Twitch's lock and drop state."""
+        return DropAnalytics(
+            getattr(self, "analytics_mutex", None),
+            getattr(self, "drop_report_state", None),
+            getattr(self, "drop_progress_last_saved", None),
+            getattr(self, "drop_status_last_saved", None),
+            track_item_art=getattr(self, "track_drop_item_art", False),
+        )
+
+    def __reconcile_awarded_game_event_drops(self, inventory):
+        updated = self.__drop_analytics().reconcile_awarded_game_event_drops(inventory)
+        if updated > 0:
+            self.__log_drop_check(
+                f"reconciled {updated} analytics entries from awarded gameEventDrops"
+            )
+        return updated
+
+    def drop_report_snapshot(self):
+        """Return the latest structured drop state tracked by this session."""
+        return self.__drop_analytics().report_snapshot()
+
+    def restore_drop_report_state(self, snapshot):
+        """Seed the drop state from a previous session without overriding newer entries."""
+        self.__drop_analytics().restore_report_state(snapshot)
 
     def __forget_inventory_minutes(self, drop):
         # The inventory snapshot still lists a claimed drop as in progress
@@ -9423,8 +7996,8 @@ class Twitch(object):
                             f"campaign {campaign.id} final drop {drop.id} claimed; "
                             "waiting for inventory completion confirmation"
                         )
-                for variant in self.__drop_variant_entries_from_drop(drop):
-                    self.__save_drop_claim_analytics(
+                for variant in self.__drop_analytics().variant_entries(drop):
+                    self.__drop_analytics().save_drop(
                         drop,
                         campaign=campaign,
                         streamer_username=streamer_username,
@@ -9666,7 +8239,7 @@ class Twitch(object):
                         )
                         campaign_name_override = campaign_details.get("name")
                         for drop_dict in campaign_details.get("timeBasedDrops") or []:
-                            self.__save_drop_snapshot_from_dict(
+                            self.__drop_analytics().save_snapshot_from_dict(
                                 drop_dict,
                                 campaign=None,
                                 streamer_username=None,

@@ -11,6 +11,95 @@ import stat
 import tempfile
 import threading
 from pathlib import Path
+from typing import Any, Literal, TypedDict, get_args
+
+
+class NotificationSchema(TypedDict):
+    """The dashboard form for one notifier."""
+
+    # Settings shown with their values.
+    fields: tuple[str, ...]
+    # Settings the dashboard can set but never reads back.
+    secrets: tuple[str, ...]
+
+
+class NotificationState(TypedDict):
+    """One notifier as config.py configures it, for the dashboard."""
+
+    enabled: bool
+    fields: dict[str, Any]
+    # Whether each secret is set. The secret itself is never sent.
+    secrets: dict[str, bool]
+    # Whether every argument the test button needs is configured.
+    test_available: bool
+
+
+class StreamerEntry(TypedDict):
+    username: str
+    # The effective settings: the defaults overlaid with this streamer's own.
+    settings: dict[str, Any]
+
+
+# Values typed Any below are read from config.py as written and are not
+# validated until the miner starts.
+class CategoryOptions(TypedDict):
+    limit: Any
+    sort: Any
+    refresh_interval_hours: Any
+    drops_enabled: Any
+
+
+class LoggingOptions(TypedDict):
+    console_level: Any
+    file_level: Any
+    daily_report: Any
+    daily_report_time: Any
+
+
+class UpdateOptions(TypedDict):
+    enabled: Any
+    interval_hours: Any
+    startup_only: bool
+
+
+class LoginOptions(TypedDict):
+    android: bool
+
+
+class WebConfig(TypedDict):
+    """What read_managed_web_config() returns to the dashboard's Config tab."""
+
+    streamers: list[StreamerEntry]
+    streamer_defaults: dict[str, Any]
+    categories: list[str]
+    category: CategoryOptions
+    # Whether each streamer source is enabled, by dashboard name.
+    sources: dict[str, bool]
+    source_order: list[str]
+    category_drops_override_streamers: bool
+    logging: LoggingOptions
+    updates: UpdateOptions
+    login: LoginOptions
+    notifications: dict[str, NotificationState]
+    notification_schemas: dict[str, "NotificationSchema"]
+    notification_event_options: list[str]
+
+
+# The "action" values update_managed_web_config() accepts.
+WebConfigAction = Literal[
+    "add",
+    "remove",
+    "reorder_categories",
+    "reorder_streamers",
+    "update_streamer",
+    "update_category",
+    "update_sources",
+    "update_logging",
+    "update_updates",
+    "update_login",
+    "update_notification",
+]
+WEB_CONFIG_ACTIONS = frozenset(get_args(WebConfigAction))
 
 CONFIG_FILE_MUTEX = threading.Lock()
 STREAMER_RE = re.compile(r"^[A-Za-z0-9_]{1,25}$")
@@ -47,7 +136,7 @@ SOURCE_ENUM_BY_NAME = {
     "wildcard_categories": "WILDCARD_CATEGORIES",
 }
 DEFAULT_SOURCE_ORDER = tuple(SOURCE_ENUM_BY_NAME)
-NOTIFICATION_SCHEMAS = {
+NOTIFICATION_SCHEMAS: dict[str, NotificationSchema] = {
     "telegram": {
         "fields": ("chat_id", "message_thread_id", "disable_notification", "events"),
         "secrets": ("token",),
@@ -90,6 +179,19 @@ NOTIFICATION_REQUIRED = {
     "pushover": {"userkey", "token"},
     "gotify": {"endpoint"},
     "ntfy": {"topic"},
+}
+# Every constructor argument without a default. Enabling a notifier without
+# one would write a call that raises TypeError, so the miner wouldn't start.
+# Unlike NOTIFICATION_REQUIRED, an empty events list counts as given here.
+NOTIFICATION_CONSTRUCTOR_REQUIRED = {
+    "telegram": {"chat_id", "token", "events"},
+    "discord": {"webhook_api", "events"},
+    "webhook": {"endpoint", "method", "events"},
+    "email": {"host", "port", "sender", "recipients", "events"},
+    "matrix": {"username", "password", "homeserver", "room_id", "events"},
+    "pushover": {"userkey", "token", "priority", "sound", "events"},
+    "gotify": {"endpoint", "priority", "events"},
+    "ntfy": {"topic", "events"},
 }
 # Constructor defaults the dashboard must show when a config omits the field.
 # The form renders a missing boolean as unchecked and saves every checkbox,
@@ -241,7 +343,7 @@ def read_config_literal(source, assignment_name, key=None, default=None):
         return default
 
 
-def _base_web_config(config_path):
+def _base_web_config(config_path: str | os.PathLike[str]) -> WebConfig:
     from TwitchChannelPointsMiner.classes.Settings import Events
 
     source = Path(config_path).read_text(encoding="utf-8")
@@ -266,7 +368,7 @@ def _base_web_config(config_path):
         and update_interval.get("__args__") == ["inf"]
     )
 
-    streamers = []
+    streamers: list[StreamerEntry] = []
     for node in streamer_nodes.elts:
         username = _streamer_value(node)
         if username is None:
@@ -312,7 +414,7 @@ def _base_web_config(config_path):
         if member in ui_name_by_enum
     ]
     source_order += [name for name in DEFAULT_SOURCE_ORDER if name not in source_order]
-    notifications = {}
+    notifications: dict[str, NotificationState] = {}
     for provider, schema in NOTIFICATION_SCHEMAS.items():
         configured = logger_settings.get(provider)
         if not isinstance(configured, dict):
@@ -331,22 +433,18 @@ def _base_web_config(config_path):
         }
         for name, default in NOTIFICATION_FIELD_DEFAULTS.get(provider, {}).items():
             fields.setdefault(name, default)
-        notifications[provider] = {
-            "enabled": bool(configured),
-            "fields": fields,
-            "secrets": {name: bool(configured.get(name)) for name in schema["secrets"]},
-        }
+        secrets = {name: bool(configured.get(name)) for name in schema["secrets"]}
         available = {
             name for name, value in fields.items() if value not in (None, "", [])
         }
-        available.update(
-            name
-            for name, present in notifications[provider]["secrets"].items()
-            if present
-        )
-        notifications[provider]["test_available"] = bool(configured) and (
-            NOTIFICATION_REQUIRED[provider].issubset(available)
-        )
+        available.update(name for name, present in secrets.items() if present)
+        notifications[provider] = {
+            "enabled": bool(configured),
+            "fields": fields,
+            "secrets": secrets,
+            "test_available": bool(configured)
+            and NOTIFICATION_REQUIRED[provider].issubset(available),
+        }
 
     return {
         "streamers": streamers,
@@ -408,7 +506,12 @@ def load_web_overrides(config_path):
     return data
 
 
-def read_managed_web_config(config_path):
+def _schema_secrets(provider: str) -> tuple[str, ...]:
+    schema = NOTIFICATION_SCHEMAS.get(provider)
+    return schema["secrets"] if schema is not None else ()
+
+
+def read_managed_web_config(config_path: str | os.PathLike[str]) -> WebConfig:
     return _base_web_config(config_path)
 
 
@@ -476,7 +579,7 @@ def migrate_web_config(config_path):
             {
                 name: value
                 for name, value in update.get("secrets", {}).items()
-                if name in NOTIFICATION_SCHEMAS.get(provider, {}).get("secrets", ())
+                if name in _schema_secrets(provider)
             }
         )
         if "enabled" in update:
@@ -683,9 +786,28 @@ def _scan_item_tail(segment):
 
 def _insert_config_item(config_path, container, rendered):
     path = Path(config_path)
-    source = path.read_text(encoding="utf-8")
-    lines = source.splitlines(keepends=True)
-    encoded = source.encode("utf-8")
+    encoded = path.read_text(encoding="utf-8").encode("utf-8")
+    updated = _insert_item_bytes(encoded, container, rendered)
+    _require_parses(updated)
+    _replace_config_bytes(path, updated, stat.S_IMODE(path.stat().st_mode))
+
+
+def _require_parses(encoded):
+    try:
+        ast.parse(encoded)
+    except SyntaxError as error:
+        raise ConfigEditError(
+            f"Refusing to save a configuration that would not parse: {error}"
+        ) from error
+
+
+def _insert_item_bytes(encoded, container, rendered, inline=False):
+    """Return encoded with rendered appended to container's items.
+
+    The item goes on its own line. With inline=True, a container written on
+    a single line keeps that layout and gets the item inline instead.
+    """
+    lines = encoded.decode("utf-8").splitlines(keepends=True)
     encoded_lines = encoded.splitlines(keepends=True)
     closing = (
         _byte_offset(encoded_lines, container.end_lineno, container.end_col_offset) - 1
@@ -698,6 +820,14 @@ def _insert_config_item(config_path, container, rendered):
         item_end, has_comma = _scan_item_tail(encoded[last_end:closing])
         if not has_comma:
             comma_at = last_end + item_end
+    if inline and container.lineno == container.end_lineno:
+        separator = b"" if not children else b" " if comma_at is None else b", "
+        if comma_at is not None:
+            # Insert right after the last item (and its own parentheses).
+            closing = comma_at
+        return (
+            encoded[:closing] + separator + rendered.encode("utf-8") + encoded[closing:]
+        )
     base_indent = lines[container.lineno - 1][
         : len(lines[container.lineno - 1]) - len(lines[container.lineno - 1].lstrip())
     ]
@@ -712,13 +842,7 @@ def _insert_config_item(config_path, container, rendered):
     updated = encoded[:closing] + insertion + encoded[closing:]
     if comma_at is not None:
         updated = updated[:comma_at] + b"," + updated[comma_at:]
-    try:
-        ast.parse(updated)
-    except SyntaxError as error:
-        raise ConfigEditError(
-            f"Refusing to save a configuration that would not parse: {error}"
-        ) from error
-    _replace_config_bytes(path, updated, stat.S_IMODE(path.stat().st_mode))
+    return updated
 
 
 def _call_keyword(call, name):
@@ -756,55 +880,227 @@ def _write_streamers(config_path, records, updated_usernames=None):
     if isinstance(updated_usernames, str):
         updated_usernames = {updated_usernames}
     else:
-        updated_usernames = set(updated_usernames or ())
-    if updated_usernames:
-        _ensure_config_import(
-            config_path,
-            "from TwitchChannelPointsMiner.classes.Chat import ChatPresence",
-        )
+        updated_usernames = {username.lower() for username in updated_usernames or ()}
+    # Write only the settings that differ from what the streamer has now, so
+    # values it inherits from the global defaults stay inherited.
+    base = _base_web_config(config_path)
+    current = {item["username"].lower(): item["settings"] for item in base["streamers"]}
+    settings_changes = {}
+    for record in records:
+        key = record["username"].lower()
+        if key not in updated_usernames:
+            continue
+        effective = current.get(key, base["streamer_defaults"])
+        changed = {
+            name: value
+            for name, value in (record.get("settings") or {}).items()
+            if effective.get(name) != value
+        }
+        if changed:
+            settings_changes[key] = changed
+    if settings_changes:
+        if any("chat" in changed for changed in settings_changes.values()):
+            _ensure_config_import(
+                config_path,
+                "from TwitchChannelPointsMiner.classes.Chat import ChatPresence",
+            )
         _ensure_config_import(
             config_path,
             "from TwitchChannelPointsMiner.classes.entities.Streamer import "
             "Streamer, StreamerSettings",
         )
-    source = Path(config_path).read_text(encoding="utf-8")
-    tree, streamers, _categories = _config_lists(source)
-    existing = {
-        _streamer_value(node).lower(): node
-        for node in streamers.elts
-        if _streamer_value(node) is not None
-    }
-    rendered_nodes = []
-    for record in records:
-        username = record["username"]
-        node = existing.get(username.lower(), ast.Constant(username))
-        if username.lower() in updated_usernames:
-            if isinstance(node, ast.Constant):
-                node = _expression(f"Streamer({username!r})")
-            settings_keyword = _call_keyword(node, "settings")
-            if settings_keyword is None or not isinstance(
-                settings_keyword.value, ast.Call
-            ):
-                settings = _expression("StreamerSettings()")
-                if settings_keyword is None:
-                    node.keywords.append(ast.keyword(arg="settings", value=settings))
-                else:
-                    settings_keyword.value = settings
-            else:
-                settings = settings_keyword.value
-            _set_call_keywords(
-                settings,
-                {
-                    name: (f"ChatPresence.{value}" if name == "chat" else repr(value))
-                    for name, value in record["settings"].items()
-                },
+    path = Path(config_path)
+    original = path.read_text(encoding="utf-8").encode("utf-8")
+    encoded = original
+    wanted = [record["username"] for record in records]
+    wanted_keys = [username.lower() for username in wanted]
+
+    # Edit STREAMERS in place instead of regenerating it, so comments,
+    # formatting and entries the dashboard doesn't understand survive.
+    # Remove entries that are no longer wanted.
+    while True:
+        streamers = _streamers_list(encoded)
+        index = next(
+            (
+                index
+                for index, node in enumerate(streamers.elts)
+                if _streamer_key(node) is not None
+                and _streamer_key(node) not in wanted_keys
+            ),
+            None,
+        )
+        if index is None:
+            break
+        encoded = _remove_list_item(encoded, streamers, index)
+
+    # Append new entries as plain usernames.
+    present = {_streamer_key(node) for node in _streamers_list(encoded).elts}
+    for username in wanted:
+        if username.lower() not in present:
+            # STREAMER_RE limits usernames to [A-Za-z0-9_], so this is a
+            # valid literal in the double quotes Black and the example use.
+            encoded = _insert_item_bytes(
+                encoded, _streamers_list(encoded), f'"{username}"', inline=True
             )
-        rendered_nodes.append(node)
-    streamers.elts = rendered_nodes
-    ast.fix_missing_locations(streamers)
-    _replace_config_node(
-        config_path, _assignment(ast.parse(source), "STREAMERS"), ast.unparse(streamers)
+            present.add(username.lower())
+
+    # Reorder by moving each entry's source text into its new slot.
+    streamers = _streamers_list(encoded)
+    slots = [
+        index
+        for index, node in enumerate(streamers.elts)
+        if _streamer_key(node) is not None
+    ]
+    slot_by_key = {_streamer_key(streamers.elts[index]): index for index in slots}
+    desired = [slot_by_key[key] for key in wanted_keys if key in slot_by_key]
+    if len(desired) == len(slots) and desired != slots:
+        order = list(range(len(streamers.elts)))
+        for slot, source_index in zip(slots, desired):
+            order[slot] = source_index
+        encoded = _reorder_list_items(encoded, streamers, order)
+
+    for key, changed in settings_changes.items():
+        encoded = _set_streamer_settings(encoded, key, changed)
+
+    if encoded != original:
+        _require_parses(encoded)
+        _replace_config_bytes(path, encoded, stat.S_IMODE(path.stat().st_mode))
+
+
+def _streamer_key(node):
+    username = _streamer_value(node)
+    return username.lower() if username is not None else None
+
+
+def _streamers_list(encoded):
+    return _config_lists(encoded.decode("utf-8"))[1]
+
+
+def _node_span(encoded_lines, node):
+    return (
+        _byte_offset(encoded_lines, node.lineno, node.col_offset),
+        _byte_offset(encoded_lines, node.end_lineno, node.end_col_offset),
     )
+
+
+def _remove_list_item(encoded, container, index):
+    encoded_lines = encoded.splitlines(keepends=True)
+    elements = container.elts
+    start, end = _node_span(encoded_lines, elements[index])
+    if index + 1 < len(elements):
+        # Up to the next entry: drops this entry, its comma and the space or
+        # comments that follow it on its line.
+        end = _node_span(encoded_lines, elements[index + 1])[0]
+    else:
+        closing = (
+            _byte_offset(encoded_lines, container.end_lineno, container.end_col_offset)
+            - 1
+        )
+        item_end, has_comma = _scan_item_tail(encoded[end:closing])
+        end += item_end
+        if index > 0:
+            # The last entry: drop it from the end of the previous entry, so
+            # the previous entry's trailing comma state is kept.
+            previous_end = _node_span(encoded_lines, elements[index - 1])[1]
+            previous_item_end, _ = _scan_item_tail(encoded[previous_end:start])
+            start = previous_end + previous_item_end
+        elif has_comma:
+            end = encoded.index(b",", end) + 1
+    return encoded[:start] + encoded[end:]
+
+
+def _line_tail(encoded, end):
+    """The rest of the line after end, without its line break."""
+    line_end = len(encoded)
+    for newline in (b"\n", b"\r"):
+        position = encoded.find(newline, end)
+        if position != -1:
+            line_end = min(line_end, position)
+    return encoded[end:line_end]
+
+
+def _reorder_list_items(encoded, container, order):
+    encoded_lines = encoded.splitlines(keepends=True)
+    elements = container.elts
+    spans = [_node_span(encoded_lines, node) for node in elements]
+    texts = [encoded[start:end] for start, end in spans]
+    # When every entry ends its own line, a comment after an entry on that
+    # line describes the entry, so it moves with it. Between an entry and
+    # the line end there can only be parentheses, a comma, spaces and a
+    # comment, so the first "#" starts the comment.
+    own_lines = all(
+        index + 1 == len(elements)
+        or elements[index + 1].lineno > elements[index].end_lineno
+        for index in range(len(elements))
+    )
+    tails = [_line_tail(encoded, end) for _start, end in spans]
+    comments = [
+        tail[tail.index(b"#") :].rstrip() if b"#" in tail else b"" for tail in tails
+    ]
+    for slot in reversed(range(len(spans))):
+        start, end = spans[slot]
+        source = order[slot]
+        if own_lines:
+            tail = tails[slot]
+            separator = tail[: tail.index(b"#")].rstrip() if b"#" in tail else tail
+            comment = b"  " + comments[source] if comments[source] else b""
+            replacement = texts[source] + separator.rstrip() + comment
+            end += len(tail)
+        else:
+            replacement = texts[source]
+        encoded = encoded[:start] + replacement + encoded[end:]
+    return encoded
+
+
+def _set_streamer_settings(encoded, key, changed):
+    for name, value in changed.items():
+        rendered = f"ChatPresence.{value}" if name == "chat" else repr(value)
+        streamers = _streamers_list(encoded)
+        node = next(node for node in streamers.elts if _streamer_key(node) == key)
+        encoded_lines = encoded.splitlines(keepends=True)
+        if isinstance(node, ast.Constant):
+            start, end = _node_span(encoded_lines, node)
+            # Keep the username literal exactly as written.
+            replacement = (
+                b"Streamer("
+                + encoded[start:end]
+                + f", settings=StreamerSettings({name}={rendered}))".encode("utf-8")
+            )
+            encoded = encoded[:start] + replacement + encoded[end:]
+            continue
+        settings_keyword = _call_keyword(node, "settings")
+        if settings_keyword is not None:
+            settings = settings_keyword.value
+        else:
+            # Streamer(username, settings) also takes settings positionally.
+            settings = node.args[1] if len(node.args) > 1 else None
+        if settings is None:
+            encoded = _insert_item_bytes(
+                encoded,
+                node,
+                f"settings=StreamerSettings({name}={rendered})",
+                inline=True,
+            )
+            continue
+        if not (
+            isinstance(settings, ast.Call)
+            and isinstance(settings.func, ast.Name)
+            and settings.func.id == "StreamerSettings"
+        ):
+            raise ConfigEditError(
+                f"The settings for {_streamer_value(node)} in config.py aren't "
+                "written as StreamerSettings(...), so the dashboard can't change "
+                "them without losing settings. Edit them in config.py instead."
+            )
+        keyword = _call_keyword(settings, name)
+        if keyword is not None:
+            start, end = _node_span(encoded_lines, keyword.value)
+            encoded = encoded[:start] + rendered.encode("utf-8") + encoded[end:]
+        else:
+            encoded = _insert_item_bytes(
+                encoded, settings, f"{name}={rendered}", inline=True
+            )
+    return encoded
 
 
 def enable_analytics_dashboard(
@@ -993,7 +1289,8 @@ def _ensure_config_import(config_path, statement):
     )
 
 
-def _validate_streamer_settings(settings):
+def _validate_streamer_settings(settings: object) -> dict[str, Any]:
+    """Return the per-streamer settings, or raise ConfigEditError."""
     if not isinstance(settings, dict) or set(settings) - STREAMER_SETTING_NAMES:
         raise ConfigEditError("Unsupported per-streamer setting.")
     for name in STREAMER_SETTING_NAMES - {"chat", "points_limit"}:
@@ -1008,6 +1305,7 @@ def _validate_streamer_settings(settings):
         or points_limit < 0
     ):
         raise ConfigEditError("Points limit must be a non-negative integer or null.")
+    return settings
 
 
 def _valid_managed_category(value):
@@ -1045,13 +1343,18 @@ def _runtime_notification_events(values):
     return normalized
 
 
-def update_managed_web_config(config_path, payload):
+def update_managed_web_config(
+    config_path: str | os.PathLike[str], payload: object
+) -> WebConfig:
+    """Apply one dashboard change; ``payload`` is the request's JSON body."""
     with CONFIG_FILE_MUTEX:
         migrate_web_config(config_path)
         return _update_managed_web_config(config_path, payload)
 
 
-def _update_managed_web_config(config_path, payload):
+def _update_managed_web_config(
+    config_path: str | os.PathLike[str], payload: object
+) -> WebConfig:
     if not isinstance(payload, dict):
         raise ConfigEditError("The configuration update must be a JSON object.")
     action = payload.get("action")
@@ -1071,7 +1374,10 @@ def _update_managed_web_config(config_path, payload):
             valid = bool(value) and kind in {"streamers", "categories"}
         if not valid:
             raise ConfigEditError("Invalid streamer username or category value.")
-        items = list(current[kind])
+        # Streamer entries or category names, depending on kind.
+        items: list[Any] = list(
+            current["streamers"] if kind == "streamers" else current["categories"]
+        )
         names = [item["username"] if kind == "streamers" else item for item in items]
         matching = {name.lower() for name in names}
         if action == "add":
@@ -1123,8 +1429,7 @@ def _update_managed_web_config(config_path, payload):
         _write_streamers(config_path, reordered)
     elif action == "update_streamer":
         username = str(payload.get("username", "")).lower().strip()
-        settings = payload.get("settings")
-        _validate_streamer_settings(settings)
+        settings = _validate_streamer_settings(payload.get("settings"))
         streamers = list(current["streamers"])
         for streamer in streamers:
             if streamer["username"].lower() == username:
@@ -1282,6 +1587,8 @@ def _update_managed_web_config(config_path, payload):
             )
     elif action == "update_notification":
         provider = payload.get("provider")
+        if not isinstance(provider, str):
+            provider = ""
         schema = NOTIFICATION_SCHEMAS.get(provider)
         values = payload.get("values") or {}
         if schema is None or not isinstance(values, dict):
@@ -1346,7 +1653,16 @@ def _update_managed_web_config(config_path, payload):
                 for name in schema["secrets"]
                 if isinstance(values.get(name), str) and values[name]
             )
-            missing = sorted(NOTIFICATION_REQUIRED[provider] - available)
+            # An empty list is still an argument the constructor accepts.
+            given = available | {
+                name
+                for name, value in {**state["fields"], **values}.items()
+                if isinstance(value, list)
+            }
+            missing = sorted(
+                (NOTIFICATION_REQUIRED[provider] - available)
+                | (NOTIFICATION_CONSTRUCTOR_REQUIRED[provider] - given)
+            )
             if missing:
                 raise ConfigEditError(f"{provider} requires: {', '.join(missing)}.")
         _write_notification(config_path, provider, values)

@@ -1,5 +1,6 @@
 from enum import Enum, auto
 from threading import Lock
+from typing import Any, ClassVar
 
 ANALYTICS_FILE_MUTEX = Lock()
 
@@ -60,6 +61,21 @@ class Settings(object):
         "disable_at_in_nickname",
         "track_category_streamer_points",
     ]
+
+    # Process-wide values the miner sets on the class at startup. They're
+    # declared here for the type checker; reading one before it's set still
+    # raises AttributeError, so code that may run first uses getattr().
+    # (Names in __slots__ can't also be declared ClassVar.)
+    logger: Any
+    streamer_settings: Any
+    enable_analytics: bool
+    disable_ssl_cert_verification: bool
+    disable_at_in_nickname: bool
+    track_category_streamer_points: bool
+    analytics_path: ClassVar[str]
+    config_path: ClassVar[str]
+    latest_release_version: ClassVar[str | None]
+    update_instructions: ClassVar[str | None]
 
 
 class Events(Enum):

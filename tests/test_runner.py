@@ -19,7 +19,7 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import (
     StreamerSettings,
 )
 from TwitchChannelPointsMiner.config_migration import CONFIG_VERSION
-from TwitchChannelPointsMiner.runner import _load_config
+from TwitchChannelPointsMiner.runner import _config_reload_interval, _load_config
 
 
 def test_main_creates_default_config_for_fresh_install(tmp_path, monkeypatch, capsys):
@@ -435,8 +435,29 @@ ANALYTICS_CONFIG = None
         _load_config(config)
 
 
+def test_restart_process_exits_with_the_supervisor_code(monkeypatch):
+    # Under the Windows background mode the supervising parent restarts the
+    # miner; os.execv would leave an unsupervised copy running on Windows.
+    execs = []
+    monkeypatch.setenv("TCPM_RESTART_EXIT_CODE", "3")
+    monkeypatch.setattr(runner.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(runner.os, "execv", lambda *args: execs.append(args))
+
+    def fake_exit(code):
+        raise SystemExit(code)
+
+    monkeypatch.setattr(runner.os, "_exit", fake_exit)
+
+    with pytest.raises(SystemExit) as exit_info:
+        runner.restart_process()
+
+    assert exit_info.value.code == 3
+    assert execs == []
+
+
 def test_restart_process_relaunches_frozen_executable(monkeypatch):
     calls = []
+    monkeypatch.delenv("TCPM_RESTART_EXIT_CODE", raising=False)
     monkeypatch.setattr(runner.sys, "frozen", True, raising=False)
     monkeypatch.setattr(runner.sys, "executable", "miner.exe")
     monkeypatch.setattr(runner.sys, "argv", ["miner.exe", "--example"])
@@ -640,3 +661,31 @@ def test_restart_process_relaunches_module_entrypoint(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "relaunched as restartpkg.entry"
+
+
+def test_config_reload_interval_defaults_to_five_seconds(monkeypatch):
+    monkeypatch.delenv("TCPM_CONFIG_RELOAD_SECONDS", raising=False)
+
+    assert _config_reload_interval() == 5.0
+
+
+def test_config_reload_interval_reads_seconds(monkeypatch):
+    monkeypatch.setenv("TCPM_CONFIG_RELOAD_SECONDS", "10")
+
+    assert _config_reload_interval() == 10.0
+
+
+def test_config_reload_interval_enforces_one_second_minimum(monkeypatch):
+    monkeypatch.setenv("TCPM_CONFIG_RELOAD_SECONDS", "0.2")
+
+    assert _config_reload_interval() == 1
+
+
+@pytest.mark.parametrize("value", ["5s", "nan", "inf", "-inf"])
+def test_config_reload_interval_rejects_non_finite_values(monkeypatch, value):
+    monkeypatch.setenv("TCPM_CONFIG_RELOAD_SECONDS", value)
+
+    with pytest.raises(SystemExit) as raised:
+        _config_reload_interval()
+
+    assert "TCPM_CONFIG_RELOAD_SECONDS" in str(raised.value)

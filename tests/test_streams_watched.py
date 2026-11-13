@@ -18,6 +18,7 @@ from TwitchChannelPointsMiner.TwitchChannelPointsMiner import (
     _normalize_streams_watched,
     _normalize_watch_status_interval_minutes,
 )
+from TwitchChannelPointsMiner.classes.DropInventory import DropInventory
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.classes.Settings import (
     Events,
@@ -172,6 +173,7 @@ def _run_one_watch_iteration(
     configured_category_slugs=None,
     drop_slot_covering_streamer=None,
     category_campaign_eligibility=None,
+    on_sleep=None,
 ):
     twitch = Twitch.__new__(Twitch)
     twitch.running = True
@@ -237,7 +239,9 @@ def _run_one_watch_iteration(
     monkeypatch.setattr(
         Twitch,
         "_Twitch__chuncked_sleep",
-        lambda self, *args, **kwargs: setattr(self, "running", False),
+        # By default the first sleep ends the run after one cycle. on_sleep
+        # replaces that, so a test can drive several cycles.
+        on_sleep or (lambda self, *args, **kwargs: setattr(self, "running", False)),
     )
 
     twitch.send_minute_watched_events(
@@ -796,10 +800,9 @@ def test_minute_watcher_stops_fully_captured_unclaimed_category_stream(monkeypat
             }
         ],
     }
-    seed_twitch = Twitch.__new__(Twitch)
-    completed = seed_twitch._Twitch__completed_campaign_ids_from_inventory(
+    completed = DropInventory(
         {"dropCampaignsInProgress": [inventory_campaign]}
-    )
+    ).completed_campaign_ids()
 
     posted = _run_one_watch_iteration(
         monkeypatch,

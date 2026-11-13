@@ -1,9 +1,34 @@
 import socket
 import time
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, Protocol, TypeAlias, TypeVar, runtime_checkable
 
 import requests
 
 from TwitchChannelPointsMiner.classes.Settings import Settings
+
+if TYPE_CHECKING:
+    from TwitchChannelPointsMiner.classes.Settings import Events
+
+# What every notifier's send() returns: whether the notification was
+# delivered, and when it wasn't, a reason safe to show the user (no URLs,
+# tokens or passwords). The logger's notification handler and the dashboard's
+# test button both rely on this shape.
+SendResult: TypeAlias = tuple[bool, str | None]
+
+# One part of a split notification: text, or whatever a provider's post_one
+# takes (Telegram and Pushover pass tuples, Discord embeds pass dicts).
+Part = TypeVar("Part")
+
+
+@runtime_checkable
+class Notifier(Protocol):
+    """The contract every notification provider implements (#282)."""
+
+    events: list[str]
+
+    def send(self, message: str, event: "Events") -> SendResult: ...
+
 
 # Longest Retry-After (seconds) honoured before a rate-limited part is given up on.
 RETRY_AFTER_CAP = 10
@@ -13,13 +38,15 @@ RETRY_AFTER_CAP = 10
 MAX_NOTIFICATION_PARTS = 10
 
 
-def notification_prefix():
+def notification_prefix() -> str:
     """Return the username prefix the logger puts at the start of notifications."""
     prefix = getattr(getattr(Settings, "logger", None), "username", None)
     return prefix if isinstance(prefix, str) else ""
 
 
-def send_parts(service, parts, post_one):
+def send_parts(
+    service: str, parts: Sequence[Part], post_one: Callable[[Part], object]
+) -> SendResult:
     """Deliver the parts of a split notification in order.
 
     ``post_one(part)`` performs the request for one part and raises
@@ -56,6 +83,8 @@ def _retry_after_seconds(error):
         return None
     headers = getattr(response, "headers", None) or {}
     for hint in (headers.get("Retry-After"), _body_retry_after(response)):
+        if hint is None:
+            continue
         try:
             return max(0.0, float(hint))
         except (TypeError, ValueError):
@@ -76,7 +105,9 @@ def _body_retry_after(response):
     return body.get("retry_after")
 
 
-def format_request_failure(service, error, part=1, parts=1):
+def format_request_failure(
+    service: str, error: BaseException, part: int = 1, parts: int = 1
+) -> str:
     """Return an actionable notification error without exposing URLs or secrets.
 
     When a notification was split into several parts, ``part`` and ``parts``

@@ -2,13 +2,19 @@
 
 """Windows executable entry point for Twitch Channel Points Miner."""
 
+import base64
+import csv
 import ctypes  # cross-platform stdlib module; only .windll is Windows-only (guarded below)
+import getpass
+import importlib.util
 import json
+import re
 import logging
 import os
 import secrets
 import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -78,15 +84,92 @@ _START_MINIMIZED_FLAG = "--start-minimized"
 _SHELL_PREFS_FILENAME = "shell_prefs.json"
 _CLOSE_BEHAVIOR_TRAY = "tray"
 _CLOSE_BEHAVIOR_QUIT = "quit"
-# Session-local (not "Global\\") - matches the rest of this launcher's
-# per-user assumptions (e.g. the autostart registry key lives under HKCU),
-# and avoids needing any elevated privilege to create.
-_SINGLE_INSTANCE_MUTEX_NAME = "Local\\TwitchChannelPointsMinerSingleInstance"
+
+
+def _mutex_user_suffix():
+    """The signed-in account, made safe for a kernel object name.
+
+    Background mining started at boot runs in session 0, where a "Local\\"
+    name is invisible to the desktop session, so the instance mutexes are
+    "Global\\". The account in the name keeps two Windows users on one PC
+    from blocking each other, as the per-session name used to.
+    """
+    domain = os.environ.get("USERDOMAIN", "")
+    try:
+        user = getpass.getuser()
+    except Exception:
+        user = os.environ.get("USERNAME", "")
+    raw = f"{domain}.{user}" if domain else user
+    return "".join(c if c.isalnum() or c in "._-" else "_" for c in raw) or "user"
+
+
+# Global, per account: see _mutex_user_suffix. Creating a Global mutex needs
+# no elevated privilege (only Global file mappings do).
+_SINGLE_INSTANCE_MUTEX_NAME = (
+    "Global\\TwitchChannelPointsMinerSingleInstance-" + _mutex_user_suffix()
+)
 # Loopback-only "please show yourself" signal for a second launch to send
 # the first. Distinct from the analytics dashboard's own (configurable,
 # default 54455) port.
 _SINGLE_INSTANCE_HOST = "127.0.0.1"
 _SINGLE_INSTANCE_PORT = 54876
+# Launcher-only flags for background mode (installed app only). They are
+# handled before anything is forwarded, so they never reach runner_main().
+_BACKGROUND_FLAG = "--background"
+_BACKGROUND_WORKER_FLAG = "--background-worker"
+_STOP_BACKGROUND_FLAG = "--stop-background"
+_REGISTER_BACKGROUND_FLAG = "--register-background"
+_UNREGISTER_BACKGROUND_FLAG = "--unregister-background"
+# Starts background mining now: through its scheduled task when there is one,
+# so a boot task keeps running after sign-out, otherwise as a child process.
+_START_BACKGROUND_FLAG = "--start-background"
+# Shows whether background mining runs, how it starts and where its log is.
+_BACKGROUND_STATUS_FLAG = "--background-status"
+# The background (headless) build's first-run console: Twitch username and
+# sign-in, then background mining starts. The default for that build.
+_SETUP_FLAG = "--setup"
+# With --register-background: also start at boot, before anyone signs in.
+_AT_BOOT_FLAG = "--at-boot"
+# A second named mutex, held only by the background supervisor, so a desktop
+# launch can tell "background mining is running" apart from "the desktop
+# window is running" - both are otherwise the same single-instance lock.
+_BACKGROUND_MUTEX_NAME = _SINGLE_INSTANCE_MUTEX_NAME + "-background"
+# Written by --stop-background (and the unregister flow) and consumed by the
+# supervisor or worker that sees it first; its presence is the stop request.
+_BACKGROUND_STOP_FILE = "background.stop"
+_BACKGROUND_TASK_NAME = "Twitch Channel Points Miner (background)"
+_BACKGROUND_RUN_VALUE_NAME = "TwitchChannelPointsMinerBackground"
+# Exit code the miner uses to ask for a restart (runner.restart_process, via
+# TCPM_RESTART_EXIT_CODE). Any other nonzero worker exit counts as a crash.
+_BACKGROUND_RESTART_EXIT_CODE = 3
+_BACKGROUND_BACKOFF_START = 30
+_BACKGROUND_BACKOFF_MAX = 600
+# A worker that ran this long before exiting was healthy, so its exit does not
+# continue an older crash streak - the backoff starts over.
+_BACKGROUND_HEALTHY_RUN_SECONDS = 3600
+_BACKGROUND_POLL_SECONDS = 1
+_BACKGROUND_STOP_TIMEOUT = 300
+_BACKGROUND_LOG_MAX_BYTES = 1024 * 1024
+_BACKGROUND_WORKER_LOG_MAX_BYTES = 5 * 1024 * 1024
+_CREATE_NO_WINDOW = 0x08000000
+_SYNCHRONIZE = 0x00100000
+_ERROR_ALREADY_EXISTS = 183
+_ERROR_ACCESS_DENIED = 5
+_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
+_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+# Indirections so tests can drive the supervisor loop without real waiting.
+_background_sleep = time.sleep
+_background_clock = time.monotonic
+# Set only inside the background worker process. A windowed exe has no desktop
+# to show a message box on, and a modal box would hang an unattended worker
+# forever, so _message_box logs to stderr instead while this is set.
+_headless_worker = False
+# The single-instance mutex handle, kept so --setup can let go of it before
+# it starts background mining; every other caller holds it until exit.
+_single_instance_handle = None
+# Job-object handles must stay referenced for the parent's whole lifetime:
+# closing the last handle is what makes the kill-on-close limit fire.
+_background_job_handles = []
 
 
 def application_directory():
@@ -119,6 +202,20 @@ def _build_install_mode():
 
 def _is_standard_build():
     return _build_install_mode() == "standard"
+
+
+def _build_flavor():
+    """Returns "headless" for the background build, which leaves out the
+    desktop window and tray, or "desktop" for every other build. Baked in by
+    build_windows.bat the same way as install_mode.txt."""
+    try:
+        return bundled_file("build_flavor.txt").read_text(encoding="utf-8").strip()
+    except OSError:
+        return "desktop"
+
+
+def _is_headless_build():
+    return _build_flavor() == "headless"
 
 
 def _build_commit_hash():
@@ -169,6 +266,22 @@ def prepare_config(application_dir):
     return config_dir, True
 
 
+def _prepare_application_directories():
+    """Resolve where this run keeps its data, create it, and make it the
+    working directory. Shared by main() and the background-mode entry points.
+
+    For a standard build this may be a brand-new per-user AppData folder
+    that has never existed before (nothing else creates it up front, as
+    exe_dir always trivially exists already) - os.chdir() requires it to
+    exist first.
+    """
+    exe_dir = application_directory()
+    application_dir = config_root_directory(exe_dir)
+    application_dir.mkdir(parents=True, exist_ok=True)
+    os.chdir(application_dir)
+    return exe_dir, application_dir
+
+
 def pause_for_first_run():
     """Keep a Windows console visible after creating its initial config, or
     after the desktop shell could not be opened."""
@@ -192,6 +305,10 @@ def _message_box(text, title, icon_flag):
     user - a --windowed build has no console, and this may run before the
     desktop shell window exists (or after it failed to open) either way.
     """
+    if _headless_worker:
+        # See _headless_worker: nothing can dismiss a box in an unattended run.
+        print(f"{title}: {text}", file=sys.stderr, flush=True)
+        return
     if os.name != "nt":
         return
     try:
@@ -552,6 +669,13 @@ def _configure_launcher_logging():
     logger.propagate = False
 
 
+# The dashboard is always on 127.0.0.1. Plain urlopen() honours system proxy
+# settings (HTTP_PROXY, Windows' Internet Options), which would route this
+# local probe through a proxy that cannot reach it, so the check never
+# succeeds behind one. An opener with no proxy handlers bypasses that.
+_LOCAL_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _wait_until_dashboard_ready(url, timeout=10.0, interval=0.2):
     """Give the analytics server, started on a background thread, a moment
     to bind its port before the shell tries to load it - and confirm it's
@@ -570,7 +694,7 @@ def _wait_until_dashboard_ready(url, timeout=10.0, interval=0.2):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=interval) as response:
+            with _LOCAL_OPENER.open(url, timeout=interval) as response:
                 if response.status == 200:
                     return True
         except (urllib.error.URLError, OSError, ValueError):
@@ -688,6 +812,7 @@ def _acquire_single_instance_lock():
     Always True on non-Windows (nothing here is meaningful without the
     Windows-only ctypes.windll), so this stays a no-op for tests/dev.
     """
+    global _single_instance_handle
     if os.name != "nt":
         return True
     try:
@@ -695,11 +820,27 @@ def _acquire_single_instance_lock():
         kernel32.SetLastError(0)
         handle = kernel32.CreateMutexW(None, False, _SINGLE_INSTANCE_MUTEX_NAME)
         if not handle:
-            return True  # Couldn't even create it - fail open, don't block launch.
-        ERROR_ALREADY_EXISTS = 183
-        return kernel32.GetLastError() != ERROR_ALREADY_EXISTS
+            # Access denied means a mutex of that name exists that this
+            # process may not open fully, so an instance is running. Any
+            # other failure fails open rather than blocking the launch.
+            return kernel32.GetLastError() != _ERROR_ACCESS_DENIED
+        if kernel32.GetLastError() == _ERROR_ALREADY_EXISTS:
+            return False
+        _single_instance_handle = handle
+        return True
     except Exception:
         return True
+
+
+def _release_single_instance_lock():
+    """Close the single-instance mutex so another process can take it."""
+    global _single_instance_handle
+    handle, _single_instance_handle = _single_instance_handle, None
+    if handle and os.name == "nt":
+        try:
+            ctypes.windll.kernel32.CloseHandle(handle)
+        except Exception:
+            pass
 
 
 def _notify_running_instance():
@@ -829,9 +970,12 @@ def _shell_prefs_path(config_path):
 
 def _read_shell_prefs(config_path):
     try:
-        return json.loads(_shell_prefs_path(config_path).read_text(encoding="utf-8"))
+        prefs = json.loads(_shell_prefs_path(config_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    # Valid JSON that isn't an object (e.g. "[]") would break every caller's
+    # .get(); treat it the same as an unreadable file.
+    return prefs if isinstance(prefs, dict) else {}
 
 
 def _read_close_behavior(config_path):
@@ -871,12 +1015,29 @@ def _autostart_command():
     return f'"{sys.executable}" {_START_MINIMIZED_FLAG}'
 
 
+def _startup_shortcut_path():
+    """The Startup-folder shortcut the installer's "start on login" task
+    creates (see windows_installer.iss). Returns None when APPDATA is
+    unset."""
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return None
+    return (
+        Path(appdata)
+        / "Microsoft/Windows/Start Menu/Programs/Startup"
+        / "Twitch Channel Points Miner.lnk"
+    )
+
+
 def is_autostart_enabled():
     """Whether this exe is currently registered to launch at Windows login,
     via the per-user Run key (no admin rights required, unlike the
-    all-users equivalent)."""
+    all-users equivalent) or the installer's Startup-folder shortcut."""
     if not getattr(sys, "frozen", False):
         return False
+    shortcut = _startup_shortcut_path()
+    if shortcut is not None and shortcut.exists():
+        return True
     try:
         import winreg
     except ImportError:
@@ -919,6 +1080,14 @@ def set_autostart_enabled(enabled):
                     pass
     except OSError as error:
         return False, f"Could not update Windows startup settings: {error}"
+    # Only one mechanism may launch the app at login, so the installer's
+    # Startup-folder shortcut goes whichever way this toggle is flipped.
+    shortcut = _startup_shortcut_path()
+    if shortcut is not None:
+        try:
+            shortcut.unlink(missing_ok=True)
+        except OSError as error:
+            return False, f"Could not update Windows startup settings: {error}"
     return True, "Saved."
 
 
@@ -949,6 +1118,11 @@ class WindowApi:
         # hide the "minimize to tray" choice when there'd be no tray to
         # minimize to.
         self._tray_available = False
+        # submit_username can be reached twice (e.g. Enter pressed again
+        # while the first call is still in flight); only the first call may
+        # start mining.
+        self._mining_lock = threading.Lock()
+        self._mining_started = False
 
     def get_console_tail(self, since_seq=0):
         lines, next_seq = self._console_buffer.tail(int(since_seq or 0))
@@ -976,7 +1150,10 @@ class WindowApi:
         except (ConfigEditError, OSError) as error:
             return {"success": False, "message": str(error)}
         self._needs_username = False
-        self._start_mining()
+        with self._mining_lock:
+            if not self._mining_started:
+                self._mining_started = True
+                self._start_mining()
         return {"success": True, "message": None}
 
     def get_dashboard_info(self):
@@ -1502,6 +1679,12 @@ def launch_shell(
             "Shell GUI loop started (renderer=%s).",
             getattr(getattr(webview, "guilib", None), "renderer", "unknown"),
         )
+        if start_minimized and tray_icon is None:
+            # Created hidden on the assumption the tray would bring it back;
+            # with no tray there is no other way to reach the window, so show
+            # it. window.show() is called here, not before start(), because
+            # pywebview only accepts window operations once its GUI loop runs.
+            window.show()
         if not needs_username:
             # Asking about the dashboard before the user has even entered a
             # username would be premature - it can still appear on a later,
@@ -1522,6 +1705,1116 @@ def launch_shell(
     )
 
 
+# --- Background mode -------------------------------------------------------
+#
+# `--background` runs mining with no window, from a Task Scheduler entry (or a
+# Run key fallback) at sign-in. The process started by the scheduler is a small
+# supervisor; it runs the real miner as a `--background-worker` child, so a
+# crash in the miner is recovered by restarting the child with a backoff
+# instead of ending the whole background session.
+
+
+class _JobObjectBasicLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("PerProcessUserTimeLimit", ctypes.c_int64),
+        ("PerJobUserTimeLimit", ctypes.c_int64),
+        ("LimitFlags", ctypes.c_uint32),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", ctypes.c_uint32),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", ctypes.c_uint32),
+        ("SchedulingClass", ctypes.c_uint32),
+    ]
+
+
+class _IoCounters(ctypes.Structure):
+    _fields_ = [
+        (name, ctypes.c_uint64)
+        for name in (
+            "ReadOperationCount",
+            "WriteOperationCount",
+            "OtherOperationCount",
+            "ReadTransferCount",
+            "WriteTransferCount",
+            "OtherTransferCount",
+        )
+    ]
+
+
+class _JobObjectExtendedLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("BasicLimitInformation", _JobObjectBasicLimitInformation),
+        ("IoInfo", _IoCounters),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
+    ]
+
+
+def _background_log_path():
+    # Callers have already chdir'd into the application directory.
+    return Path.cwd() / "logs" / "background.log"
+
+
+def _background_stop_path():
+    return Path.cwd() / _BACKGROUND_STOP_FILE
+
+
+def _remove_background_stop_file():
+    try:
+        _background_stop_path().unlink()
+    except OSError:
+        pass  # Usually just "not there", which is the goal anyway.
+
+
+def _rotate_log_if_large(path, max_bytes):
+    """Move an oversized log aside to <name>.prev so a long-running unattended
+    install does not grow one log file without limit."""
+    try:
+        if path.stat().st_size > max_bytes:
+            path.replace(path.with_name(path.name + ".prev"))
+    except OSError:
+        pass
+
+
+def _background_log(message):
+    """Append one timestamped line to logs/background.log.
+
+    The windowed exe has no console, so this file is the only record of an
+    unattended run. Logging must never be what crashes that run, hence the
+    broad OSError guard.
+    """
+    line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n"
+    try:
+        path = _background_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(line)
+    except OSError:
+        pass
+
+
+def _no_window_flags():
+    """Popen/run keyword arguments that stop a console window appearing for
+    the child. Empty off Windows, where creationflags is not accepted."""
+    return {"creationflags": _CREATE_NO_WINDOW} if os.name == "nt" else {}
+
+
+def _acquire_background_mutex():
+    """Create the background-instance mutex and keep its handle open for the
+    process lifetime, the same pattern as _acquire_single_instance_lock.
+
+    Returns False only if it already existed, meaning another background
+    supervisor is running. The main single-instance lock is taken first, so
+    this is a backstop rather than the primary guard.
+    """
+    if os.name != "nt":
+        return True
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetLastError(0)
+        handle = kernel32.CreateMutexW(None, False, _BACKGROUND_MUTEX_NAME)
+        if not handle:
+            return True
+        return kernel32.GetLastError() != _ERROR_ALREADY_EXISTS
+    except Exception:
+        return True
+
+
+def _background_instance_running():
+    """True while a background supervisor holds _BACKGROUND_MUTEX_NAME.
+
+    Opening (rather than creating) the mutex means this never takes ownership
+    itself; the handle is closed straight away.
+    """
+    if os.name != "nt":
+        return False
+    try:
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenMutexW(_SYNCHRONIZE, False, _BACKGROUND_MUTEX_NAME)
+        if not handle:
+            return False
+        kernel32.CloseHandle(handle)
+        return True
+    except Exception:
+        return False
+
+
+def _sign_in_hint():
+    """Where the user goes to set up a username and the Twitch sign-in."""
+    if _is_headless_build():
+        return 'Run "Set up background mining" from the Start menu once to sign in.'
+    return "Open the desktop app once to sign in."
+
+
+def _background_setup_problem(config_path, application_dir):
+    """Why background mining can't start unattended yet, or None when it can.
+
+    Background mode cannot show Twitch's activation code or ask for a
+    username, so both must already be done, in the desktop app or the
+    background build's --setup console. Each reason names the fix.
+    """
+    if _needs_username(config_path):
+        return f"No Twitch username is configured. {_sign_in_hint()}"
+    try:
+        signed_in = _twitch_session_saved(config_path, application_dir)
+    except (OSError, SyntaxError):
+        return f"Could not read {config_path}; background mining not started."
+    if not signed_in:
+        return f"Not signed in to Twitch yet. {_sign_in_hint()}"
+    return None
+
+
+def _background_ready(config_path, application_dir):
+    """True if background mining can start unattended; otherwise logs why."""
+    problem = _background_setup_problem(config_path, application_dir)
+    if problem:
+        _background_log(problem)
+        return False
+    return True
+
+
+def _twitch_session_saved(config_path, application_dir):
+    """True once a Twitch login for the configured username is saved.
+
+    Raises OSError or SyntaxError when the configuration can't be read.
+    """
+    source = config_path.read_text(encoding="utf-8")
+    username = read_config_literal(source, "MINER_CONFIG", "username")
+    android_login = read_config_literal(
+        source, "MINER_CONFIG", "android_login", default=False
+    )
+    # Twitch.py stores the Android login under its own cookie file, so check
+    # the file for the configured login style first. Either one is enough.
+    cookie_names = [username, f"{username}-android"]
+    if android_login:
+        cookie_names.reverse()
+    cookies_dir = application_dir / "cookies"
+    return any((cookies_dir / f"{name}.pkl").is_file() for name in cookie_names)
+
+
+def _kill_worker_with_parent(proc):
+    """Put the worker in a Job Object set to kill its processes when the job's
+    last handle closes. The parent holds that handle for its whole life, so
+    ending the parent (e.g. Task Scheduler's "End") also ends the worker,
+    instead of leaving an orphaned miner running.
+
+    Best-effort: any failure is logged and the worker simply is not tied to
+    the parent. A no-op off Windows.
+    """
+    if os.name != "nt":
+        return
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateJobObjectW.restype = ctypes.c_void_p
+        kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        kernel32.SetInformationJobObject.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+        ]
+        kernel32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            _background_log(
+                "Could not create a job object; the worker will not follow this process."
+            )
+            return
+        info = _JobObjectExtendedLimitInformation()
+        info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel32.SetInformationJobObject(
+            job,
+            _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+        ):
+            _background_log(
+                "Could not configure the job object; the worker will not follow this process."
+            )
+            return
+        if not kernel32.AssignProcessToJobObject(job, int(proc._handle)):
+            _background_log(
+                "Could not put the worker in the job object; it will not follow this process."
+            )
+            return
+        _background_job_handles.append(job)
+    except Exception as error:
+        _background_log(f"Could not tie the worker to this process: {error}")
+
+
+def _start_background_worker():
+    """Launch one `--background-worker` child in the application directory."""
+    env = {**os.environ, "TCPM_RESTART_EXIT_CODE": str(_BACKGROUND_RESTART_EXIT_CODE)}
+    proc = subprocess.Popen(
+        [sys.executable, _BACKGROUND_WORKER_FLAG],
+        cwd=str(Path.cwd()),
+        env=env,
+        **_no_window_flags(),
+    )
+    _kill_worker_with_parent(proc)
+    return proc
+
+
+def _wait_background_backoff(seconds):
+    """Wait out a restart delay, checking for a stop request every second.
+
+    Returns True if a stop was requested. The stop file is consumed here so a
+    later launch is not stopped by a stale request.
+    """
+    deadline = _background_clock() + seconds
+    while _background_clock() < deadline:
+        if _background_stop_path().exists():
+            _remove_background_stop_file()
+            return True
+        _background_sleep(_BACKGROUND_POLL_SECONDS)
+    return False
+
+
+def _supervise_background_worker():
+    """Run the worker, restarting it as needed. Returns the supervisor's exit
+    code.
+
+    A worker exit of 0 ends the session. Exit code 3 is the miner asking for
+    a restart, so it restarts at once with no backoff. Any other exit is a
+    crash: restart after a delay that doubles with each consecutive crash, up
+    to _BACKGROUND_BACKOFF_MAX. A worker that ran for a long time resets that
+    streak. While the worker runs, the worker itself watches for the stop
+    file, so this loop only has to wait for it to exit.
+    """
+    backoff = _BACKGROUND_BACKOFF_START
+    while True:
+        started = _background_clock()
+        proc = _start_background_worker()
+        code = proc.wait()
+        ran_for = _background_clock() - started
+        if code == 0:
+            _background_log("Background mining stopped.")
+            return 0
+        if code == _BACKGROUND_RESTART_EXIT_CODE:
+            _background_log("Restarting (requested by the miner).")
+            continue
+        if ran_for >= _BACKGROUND_HEALTHY_RUN_SECONDS:
+            backoff = _BACKGROUND_BACKOFF_START
+        _background_log(
+            f"Background worker exited with code {code}; restarting in {backoff} seconds."
+        )
+        if _wait_background_backoff(backoff):
+            _background_log(
+                "Stop requested during the restart delay. Background mining stopped."
+            )
+            return 0
+        backoff = min(backoff * 2, _BACKGROUND_BACKOFF_MAX)
+
+
+def _background_main():
+    """`--background`: the supervising parent, started at sign-in.
+
+    Holds the main single-instance lock and the background mutex for its whole
+    life. Exits quietly (no message box - nobody is there to dismiss it) when
+    the setup is incomplete or another instance is already running.
+    """
+    exe_dir, application_dir = _prepare_application_directories()
+    if not _acquire_single_instance_lock():
+        _background_log(
+            "Twitch Channel Points Miner is already running; background mining not started."
+        )
+        return 0
+    if not _acquire_background_mutex():
+        _background_log("Background mining is already running.")
+        return 0
+    _rotate_log_if_large(_background_log_path(), _BACKGROUND_LOG_MAX_BYTES)
+    # A stop file left over from an earlier session must not stop this one.
+    # Deleted only now that the lock is ours, so a refused launch cannot
+    # discard a stop request meant for the instance that is running.
+    _remove_background_stop_file()
+    _background_log("Background launcher starting.")
+
+    if _is_standard_build():
+        # Migration notices are only for the desktop window; there is nobody
+        # here to read one.
+        _migrate_legacy_windows_data(exe_dir, application_dir)
+    config_dir, _created = prepare_config(application_dir)
+    config_path = config_dir / "config.py"
+    if not _background_ready(config_path, application_dir):
+        return 0
+
+    _background_log("Background mining starting.")
+    return _supervise_background_worker()
+
+
+def _redirect_worker_output(log_path):
+    """Send stdout/stderr to the worker's log file. Kept separate so tests can
+    skip it - redirecting the real streams would break pytest's capture."""
+    stream = open(log_path, "a", encoding="utf-8", buffering=1)
+    sys.stdout = stream
+    sys.stderr = stream
+
+
+def _background_worker_main():
+    """`--background-worker`: runs the miner once, without a window.
+
+    Started by _background_main, which holds the single-instance lock - so
+    this does not take one itself. Returns 0 when a stop was requested and
+    the miner shut down cleanly, and 1 when the miner ended on its own; the
+    parent treats 1 as a crash and restarts with backoff.
+    """
+    global _headless_worker
+    exe_dir, application_dir = _prepare_application_directories()
+    log_path = application_dir / "logs" / "background-worker.log"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        _rotate_log_if_large(log_path, _BACKGROUND_WORKER_LOG_MAX_BYTES)
+        _redirect_worker_output(log_path)
+    except OSError:
+        pass  # Keep going with whatever streams exist rather than die here.
+    _headless_worker = True
+
+    config_dir, _created = prepare_config(application_dir)
+    argv = [
+        "--config-dir",
+        str(config_dir),
+        "--legacy-runner",
+        str(exe_dir / "run.py"),
+    ]
+    handle = _MinerThreadHandle()
+    thread = threading.Thread(
+        target=_run_miner_thread,
+        args=(argv, handle.set_miner),
+        name="Miner runner",
+        daemon=True,
+    )
+    handle.thread = thread
+    thread.start()
+    print("Background worker started.", flush=True)
+
+    while True:
+        if _background_stop_path().exists():
+            _remove_background_stop_file()
+            print("Stop requested; shutting down background mining.", flush=True)
+            _stop_miner_gracefully(handle)
+            thread.join(_BACKGROUND_STOP_TIMEOUT)
+            return 0
+        if not thread.is_alive():
+            print(
+                "The miner stopped on its own; the supervisor will decide whether to restart it.",
+                flush=True,
+            )
+            return 1
+        thread.join(_BACKGROUND_POLL_SECONDS)
+
+
+def _end_background_worker(code):
+    """Exit a frozen worker at once with `code`.
+
+    A normal interpreter exit waits for every non-daemon thread, and a miner
+    thread that outlived its stop or crash (an IRC chat still connecting, a
+    stuck watcher) would keep the worker alive with nothing to end it: the
+    parent waits on the process and only restarts it once it exits. The miner
+    has already shut down or crashed by now, so nothing is lost. Outside a
+    frozen build (tests, a source checkout) the code is just returned.
+    """
+    if getattr(sys, "frozen", False):
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except Exception:
+                pass
+        os._exit(code)
+    return code
+
+
+def _request_background_stop(timeout=_BACKGROUND_STOP_TIMEOUT):
+    """Ask a running background supervisor to stop, then wait for it.
+
+    Returns True once nothing is running, or False if it is still running
+    after `timeout` seconds. Callers must already be in the application
+    directory.
+    """
+    if not _background_instance_running():
+        _remove_background_stop_file()
+        return True
+    _background_stop_path().touch()
+    deadline = _background_clock() + timeout
+    while _background_instance_running():
+        if _background_clock() >= deadline:
+            return False
+        _background_sleep(_BACKGROUND_POLL_SECONDS)
+    return True
+
+
+def _stop_background_main():
+    """`--stop-background`: stop the background miner from the Start menu or a
+    script, and wait for it to finish shutting down."""
+    _prepare_application_directories()
+    if not _background_instance_running():
+        _remove_background_stop_file()
+        _background_log("Background mining is not running.")
+        return 0
+    if _request_background_stop():
+        _background_log("Background mining stopped.")
+        return 0
+    _background_log(
+        f"Background mining did not stop within {_BACKGROUND_STOP_TIMEOUT} seconds."
+    )
+    return 1
+
+
+def _powershell_single_quoted(value):
+    """Quote `value` as a PowerShell single-quoted literal. Inside one, the
+    only escape PowerShell recognises is a doubled single quote."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _background_task_script(exe_path, task_name):
+    """PowerShell that registers the at-sign-in background task for the
+    current user. Built by string concatenation with every value quoted, so
+    an exe path or task name containing an apostrophe cannot break out of
+    its literal."""
+    return (
+        "$user = [Security.Principal.WindowsIdentity]::GetCurrent().Name; "
+        f"$action = New-ScheduledTaskAction -Execute {_powershell_single_quoted(exe_path)}"
+        f" -Argument {_powershell_single_quoted(_BACKGROUND_FLAG)}; "
+        "$trigger = New-ScheduledTaskTrigger -AtLogOn -User $user; "
+        "$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited; "
+        "$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero)"
+        " -MultipleInstances IgnoreNew -AllowStartIfOnBatteries"
+        " -DontStopIfGoingOnBatteries -StartWhenAvailable; "
+        f"Register-ScheduledTask -TaskName {_powershell_single_quoted(task_name)}"
+        " -Action $action -Trigger $trigger -Principal $principal -Settings $settings"
+        " -Force | Out-Null"
+    )
+
+
+# whoami prints the SID that goes into the task's security descriptor; only
+# a well-formed SID is ever embedded there.
+_SID_RE = re.compile(r"S-1-\d+(-\d+)+")
+
+
+def _current_user_account():
+    """(account, sid) of the user running this process, from whoami.
+
+    Read here, before elevating, because the elevated PowerShell may run as a
+    different administrator account. Raises OSError when it can't be read.
+    """
+    try:
+        result = subprocess.run(
+            ["whoami.exe", "/user", "/fo", "csv", "/nh"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            **_no_window_flags(),
+        )
+    except subprocess.TimeoutExpired as error:
+        raise OSError(str(error)) from error
+    if result.returncode != 0:
+        raise OSError(
+            _first_line(result.stderr) or f"whoami exit code {result.returncode}"
+        )
+    rows = list(csv.reader([result.stdout.strip()]))
+    if not rows or len(rows[0]) < 2 or not _SID_RE.fullmatch(rows[0][1]):
+        raise OSError("could not read the current account from whoami")
+    return rows[0][0], rows[0][1]
+
+
+def _boot_task_script(exe_path, task_name, account, sid, error_path):
+    """PowerShell, run elevated, that registers background mining to start at
+    boot and at sign-in, as `account`, without storing a password (S4U).
+
+    The task's security descriptor also grants `sid` full access, so the
+    same user can start, stop and delete it later without elevating. Any
+    failure message is written to `error_path`, since an elevated process's
+    output can't be read back.
+    """
+    q = _powershell_single_quoted
+    return (
+        "$ErrorActionPreference = 'Stop'; "
+        "try { "
+        f"$action = New-ScheduledTaskAction -Execute {q(exe_path)}"
+        f" -Argument {q(_BACKGROUND_FLAG)}; "
+        "$triggers = @((New-ScheduledTaskTrigger -AtStartup),"
+        f" (New-ScheduledTaskTrigger -AtLogOn -User {q(account)})); "
+        f"$principal = New-ScheduledTaskPrincipal -UserId {q(account)}"
+        " -LogonType S4U -RunLevel Limited; "
+        "$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero)"
+        " -MultipleInstances IgnoreNew -AllowStartIfOnBatteries"
+        " -DontStopIfGoingOnBatteries -StartWhenAvailable"
+        " -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1); "
+        f"Register-ScheduledTask -TaskName {q(task_name)}"
+        " -Action $action -Trigger $triggers -Principal $principal"
+        " -Settings $settings -Force | Out-Null; "
+        "$service = New-Object -ComObject Schedule.Service; $service.Connect(); "
+        f"$task = $service.GetFolder('\\').GetTask({q(task_name)}); "
+        # 4 is DACL_SECURITY_INFORMATION; FA is full access.
+        f"$task.SetSecurityDescriptor($task.GetSecurityDescriptor(4) + {q(f'(A;;FA;;;{sid})')}, 0); "
+        "exit 0 "
+        "} catch { "
+        f"Set-Content -LiteralPath {q(str(error_path))} -Value $_.Exception.Message -Encoding UTF8; "
+        "exit 1 "
+        "}"
+    )
+
+
+def _elevation_error_path():
+    path = Path.cwd() / "logs" / "background-elevated-error.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _run_elevated_powershell(script, error_path):
+    """Run `script` in an elevated PowerShell (one UAC prompt) and wait.
+
+    Returns (ok, detail). The detail is what the script wrote to
+    `error_path`, or the launcher PowerShell's own error, such as a declined
+    UAC prompt.
+    """
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    launcher = (
+        "$ErrorActionPreference = 'Stop'; "
+        "$process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait"
+        " -PassThru -WindowStyle Hidden -ArgumentList"
+        " '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',"
+        f"'-EncodedCommand','{encoded}'; "
+        "exit $process.ExitCode"
+    )
+    try:
+        error_path.unlink()
+    except OSError:
+        pass
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                launcher,
+            ],
+            capture_output=True,
+            text=True,
+            # Long enough for someone to answer the UAC prompt.
+            timeout=600,
+            **_no_window_flags(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return False, str(error)
+    if result.returncode == 0:
+        return True, ""
+    try:
+        detail = _first_line(error_path.read_text(encoding="utf-8-sig"))
+        error_path.unlink()
+    except OSError:
+        detail = ""
+    return False, (
+        detail or _first_line(result.stderr) or f"exit code {result.returncode}"
+    )
+
+
+def _register_boot_task(exe_path):
+    """Register the boot-time task. Returns (ok, detail)."""
+    try:
+        account, sid = _current_user_account()
+    except OSError as error:
+        return False, str(error)
+    error_path = _elevation_error_path()
+    return _run_elevated_powershell(
+        _boot_task_script(exe_path, _BACKGROUND_TASK_NAME, account, sid, error_path),
+        error_path,
+    )
+
+
+def _background_task_xml():
+    """The registered background task's XML, or None when there is none."""
+    try:
+        result = subprocess.run(
+            ["schtasks.exe", "/Query", "/TN", _BACKGROUND_TASK_NAME, "/XML"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            **_no_window_flags(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def _background_run_value_set():
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _AUTOSTART_KEY_PATH) as key:
+            winreg.QueryValueEx(key, _BACKGROUND_RUN_VALUE_NAME)
+        return True
+    except (ImportError, OSError):
+        return False
+
+
+def _background_start_mode():
+    """How background mining starts: "boot", "sign-in", "run-key" or None."""
+    xml = _background_task_xml()
+    if xml is not None:
+        return "boot" if "<BootTrigger" in xml else "sign-in"
+    if _background_run_value_set():
+        return "run-key"
+    return None
+
+
+def _first_line(text):
+    for line in (text or "").splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _delete_background_run_value():
+    """Remove the background Run entry. A missing entry is not an error;
+    other registry failures are raised for the caller to report."""
+    import winreg
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, _AUTOSTART_KEY_PATH, 0, winreg.KEY_SET_VALUE
+        ) as key:
+            winreg.DeleteValue(key, _BACKGROUND_RUN_VALUE_NAME)
+    except FileNotFoundError:
+        pass
+
+
+def _finish_background_registration(mechanism):
+    """Make background mode the only thing that starts at sign-in.
+
+    The desktop app's own Run entry is removed so the window does not also
+    open on login. A leftover Run-key fallback is removed when a scheduled
+    task was used instead.
+    """
+    set_autostart_enabled(False)
+    if mechanism == "task":
+        try:
+            _delete_background_run_value()
+        except (ImportError, OSError):
+            pass  # Harmless duplicate at worst; registration itself succeeded.
+
+
+def register_background_task(at_boot=False):
+    """Register background mining to start at sign-in, or with `at_boot` at
+    boot and at sign-in.
+
+    The boot task runs whether or not anyone is signed in, as this user
+    without a stored password (S4U), and registering it needs one UAC
+    prompt. When that fails or is declined, registration carries on as the
+    sign-in task and the message says why.
+
+    The sign-in task is a per-user scheduled task, which can be stopped
+    from Task Scheduler and has no effect on the desktop app's Run entry.
+    It falls back to a per-user Run value if the task cannot be created,
+    e.g. when PowerShell or Task Scheduler is unavailable.
+
+    Returns (ok, mechanism, message); mechanism is "boot-task", "task",
+    "run-key" or None.
+    """
+    if at_boot:
+        boot_ok, boot_detail = _register_boot_task(sys.executable)
+        if boot_ok:
+            _finish_background_registration("task")
+            return (
+                True,
+                "boot-task",
+                "Background mining will start when Windows starts, before "
+                "anyone signs in (scheduled task).",
+            )
+        ok, mechanism, message = register_background_task()
+        return (
+            ok,
+            mechanism,
+            f"Could not set up starting at boot ({boot_detail}). {message}",
+        )
+    script = _background_task_script(sys.executable, _BACKGROUND_TASK_NAME)
+    task_error = None
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            **_no_window_flags(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        task_error = str(error)
+    else:
+        if result.returncode == 0:
+            _finish_background_registration("task")
+            return (
+                True,
+                "task",
+                "Background mining will start at sign-in (scheduled task).",
+            )
+        task_error = _first_line(result.stderr) or f"exit code {result.returncode}"
+
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, _AUTOSTART_KEY_PATH, 0, winreg.KEY_SET_VALUE
+        ) as key:
+            winreg.SetValueEx(
+                key,
+                _BACKGROUND_RUN_VALUE_NAME,
+                0,
+                winreg.REG_SZ,
+                f'"{sys.executable}" {_BACKGROUND_FLAG}',
+            )
+    except (ImportError, OSError) as error:
+        return (
+            False,
+            None,
+            "Could not set up background mining at sign-in. Scheduled task failed "
+            f"({task_error}); Run entry failed ({error}).",
+        )
+    _finish_background_registration("run-key")
+    return (
+        True,
+        "run-key",
+        "A scheduled task could not be created "
+        f"({task_error}), so background mining will start at sign-in from a "
+        "per-user Run entry instead.",
+    )
+
+
+def _unregister_task_elevated():
+    q = _powershell_single_quoted
+    error_path = _elevation_error_path()
+    script = (
+        "$ErrorActionPreference = 'Stop'; try { "
+        f"Unregister-ScheduledTask -TaskName {q(_BACKGROUND_TASK_NAME)} -Confirm:$false; "
+        "exit 0 } catch { "
+        f"Set-Content -LiteralPath {q(str(error_path))} -Value $_.Exception.Message -Encoding UTF8; "
+        "exit 1 }"
+    )
+    return _run_elevated_powershell(script, error_path)
+
+
+def unregister_background_task():
+    """Stop background mining if it is running, then remove the scheduled task
+    and the Run entry. Returns (ok, message)."""
+    if not _request_background_stop():
+        return (
+            False,
+            "Background mining is still running and did not stop in time. "
+            "Stop it first, then try again.",
+        )
+    problems = []
+    try:
+        result = subprocess.run(
+            ["schtasks.exe", "/Delete", "/TN", _BACKGROUND_TASK_NAME, "/F"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            **_no_window_flags(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        problems.append(f"could not run schtasks.exe ({error})")
+    else:
+        # A task that was never created (or already removed) is the goal
+        # state, so only other failures count.
+        output = f"{result.stdout}\n{result.stderr}".lower()
+        if (
+            result.returncode != 0
+            and "cannot find" not in output
+            and "does not exist" not in output
+        ):
+            reason = _first_line(result.stderr) or result.returncode
+            # A boot task registered by an older build, or by an
+            # administrator, may only be deletable elevated.
+            if "access is denied" in output:
+                ok, detail = _unregister_task_elevated()
+                if not ok:
+                    problems.append(
+                        f"could not delete the scheduled task ({reason}; "
+                        f"as administrator: {detail})"
+                    )
+            else:
+                problems.append(f"could not delete the scheduled task ({reason})")
+    try:
+        _delete_background_run_value()
+    except (ImportError, OSError) as error:
+        problems.append(f"could not remove the Run entry ({error})")
+    if problems:
+        return (
+            False,
+            "Could not fully remove background mining: " + "; ".join(problems) + ".",
+        )
+    return True, "Background mining no longer starts automatically."
+
+
+def _register_background_main():
+    """`--register-background`: installed app only, as the mining-at-sign-in
+    setup step. Logs the outcome to background.log."""
+    _prepare_application_directories()
+    if not getattr(sys, "frozen", False):
+        _background_log(
+            "Background mode can only be registered from the installed app."
+        )
+        return 1
+    ok, _mechanism, message = register_background_task(
+        at_boot=_AT_BOOT_FLAG in sys.argv[1:]
+    )
+    _background_log(message if ok else f"Background registration failed: {message}")
+    return 0 if ok else 1
+
+
+def _open_sign_in():
+    """Start whatever this build uses to sign in: the --setup console for the
+    background build, the desktop window otherwise."""
+    argv = [sys.executable, _SETUP_FLAG] if _is_headless_build() else [sys.executable]
+    try:
+        subprocess.Popen(argv, cwd=str(Path(sys.executable).parent))
+    except OSError as error:
+        _background_log(f"Could not open the sign-in window: {error}")
+        return 1
+    return 0
+
+
+def _start_background_main():
+    """`--start-background`: start background mining now.
+
+    Runs the scheduled task when there is one, so a boot task's miner keeps
+    running after sign-out; otherwise starts the supervisor as a child that
+    outlives this process. Opens the sign-in step instead while the username
+    or Twitch login is missing.
+    """
+    _exe_dir, application_dir = _prepare_application_directories()
+    if _background_instance_running():
+        _background_log("Background mining is already running.")
+        return 0
+    config_dir, _created = prepare_config(application_dir)
+    problem = _background_setup_problem(config_dir / "config.py", application_dir)
+    if problem:
+        _background_log(problem)
+        return _open_sign_in()
+    if _background_task_xml() is not None:
+        try:
+            result = subprocess.run(
+                ["schtasks.exe", "/Run", "/TN", _BACKGROUND_TASK_NAME],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                **_no_window_flags(),
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            _background_log(f"Could not run the scheduled task ({error}).")
+        else:
+            if result.returncode == 0:
+                _background_log("Started background mining from its scheduled task.")
+                return 0
+            _background_log(
+                "Could not run the scheduled task "
+                f"({_first_line(result.stderr) or result.returncode}); "
+                "starting background mining directly."
+            )
+    try:
+        subprocess.Popen(
+            [sys.executable, _BACKGROUND_FLAG],
+            cwd=str(Path(sys.executable).parent),
+            **_no_window_flags(),
+        )
+    except OSError as error:
+        _background_log(f"Could not start background mining: {error}")
+        return 1
+    return 0
+
+
+_START_MODE_TEXT = {
+    "boot": "It starts when Windows starts, before anyone signs in.",
+    "sign-in": "It starts when you sign in.",
+    "run-key": "It starts when you sign in (from a Run entry).",
+    None: "It is not set to start automatically.",
+}
+
+
+def _background_status_text():
+    running = _background_instance_running()
+    lines = [
+        (
+            "Background mining is running."
+            if running
+            else "Background mining is not running."
+        ),
+        _START_MODE_TEXT[_background_start_mode()],
+        f"Log: {_background_log_path()}",
+    ]
+    try:
+        log_lines = _background_log_path().read_text(encoding="utf-8").splitlines()
+    except OSError:
+        log_lines = []
+    last = next((line for line in reversed(log_lines) if line.strip()), "")
+    if last:
+        lines.append(f"Last entry: {last}")
+    return "\n\n".join(lines)
+
+
+def _background_status_main():
+    """`--background-status`: a message box with the background state."""
+    _prepare_application_directories()
+    _message_box(_background_status_text(), "Twitch Channel Points Miner", 0x40)
+    return 0
+
+
+def _attach_console():
+    """Give this windowed exe a console of its own and point stdin, stdout and
+    stderr at it, so --setup can show Twitch's activation code and read a
+    username. Returns False when there is no console to use."""
+    if os.name != "nt":
+        return False
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.AllocConsole()  # Fails harmlessly when one is attached.
+        kernel32.SetConsoleOutputCP(65001)
+        kernel32.SetConsoleCP(65001)
+        sys.stdout = open("CONOUT$", "w", encoding="utf-8", buffering=1)
+        sys.stderr = sys.stdout
+        sys.stdin = open("CONIN$", "r", encoding="utf-8")
+    except (AttributeError, OSError):
+        return False
+    return True
+
+
+def _prompt_username(config_path):
+    """Ask for the Twitch username until a valid one is saved. Returns False
+    when input ends first."""
+    from TwitchChannelPointsMiner.config_editor import set_miner_username
+
+    while True:
+        try:
+            username = input("Twitch username: ")
+        except (EOFError, RuntimeError):
+            return False
+        try:
+            set_miner_username(config_path, username)
+        except ConfigEditError as error:
+            print(error)
+            continue
+        return True
+
+
+def _sign_in_with_miner(config_dir, exe_dir, config_path, application_dir):
+    """Run the miner in this console until its Twitch login is saved, then
+    stop it. Returns True once signed in."""
+    argv = [
+        "--config-dir",
+        str(config_dir),
+        "--legacy-runner",
+        str(exe_dir / "run.py"),
+    ]
+    handle = _MinerThreadHandle()
+    thread = threading.Thread(
+        target=_run_miner_thread,
+        args=(argv, handle.set_miner),
+        name="Miner runner",
+        daemon=True,
+    )
+    handle.thread = thread
+    thread.start()
+    while True:
+        try:
+            signed_in = _twitch_session_saved(config_path, application_dir)
+        except (OSError, SyntaxError):
+            signed_in = False
+        if signed_in:
+            print("\nSigned in to Twitch.", flush=True)
+            _stop_miner_gracefully(handle)
+            thread.join(_BACKGROUND_STOP_TIMEOUT)
+            return True
+        if not thread.is_alive():
+            print(
+                "\nThe miner stopped before the Twitch sign-in finished. "
+                "See the messages above.",
+                flush=True,
+            )
+            return False
+        thread.join(_BACKGROUND_POLL_SECONDS)
+
+
+def _setup_main():
+    """`--setup`: the background build's first-run console.
+
+    Asks for the Twitch username if none is set, runs the miner here until
+    Twitch's activation finishes, then starts background mining. Also safe
+    to run again later: once signed in it only starts background mining.
+    """
+    _attach_console()
+    exe_dir, application_dir = _prepare_application_directories()
+    print("Twitch Channel Points Miner - background mining setup\n", flush=True)
+    if not _acquire_single_instance_lock():
+        if _background_instance_running():
+            print(
+                "Background mining is already running. To sign in again, "
+                'choose "Stop background mining" in the Start menu first.'
+            )
+        else:
+            print("Twitch Channel Points Miner is already running.")
+        pause_for_first_run()
+        return 0
+    if _is_standard_build():
+        _migrate_legacy_windows_data(exe_dir, application_dir)
+    config_dir, _created = prepare_config(application_dir)
+    config_path = config_dir / "config.py"
+    if _needs_username(config_path):
+        print("Enter the Twitch account to mine with.")
+        if not _prompt_username(config_path):
+            return 1
+    try:
+        signed_in = _twitch_session_saved(config_path, application_dir)
+    except (OSError, SyntaxError) as error:
+        print(f"Could not read {config_path}: {error}")
+        pause_for_first_run()
+        return 1
+    if signed_in:
+        print("Already signed in to Twitch.")
+    else:
+        print(
+            "Signing in to Twitch. Open the link below and enter the code it "
+            "shows; this window continues by itself afterwards.\n",
+            flush=True,
+        )
+        if not _sign_in_with_miner(config_dir, exe_dir, config_path, application_dir):
+            pause_for_first_run()
+            return 1
+    _release_single_instance_lock()
+    print("Starting background mining...", flush=True)
+    code = _start_background_main()
+    if code == 0:
+        print(
+            "Background mining is running. You can close this window.\n"
+            'Stop it with "Stop background mining" in the Start menu; its log is '
+            f"{_background_log_path()}."
+        )
+    else:
+        print(f"Background mining did not start. See {_background_log_path()}.")
+    pause_for_first_run()
+    return code
+
+
+def _unregister_background_main():
+    """`--unregister-background`: stops background mining if it is running and
+    removes its sign-in entry. Logs the outcome to background.log."""
+    _prepare_application_directories()
+    ok, message = unregister_background_task()
+    _background_log(message)
+    return 0 if ok else 1
+
+
 def self_test():
     """Verify the frozen exe actually has its GUI dependency bundled.
 
@@ -1534,6 +2827,19 @@ def self_test():
     runtime. Must never open a window or message box: nothing would be
     there to dismiss it on a CI runner, and the job would hang forever.
     """
+    if _is_headless_build():
+        # The background build must not carry the window and tray: that is
+        # what keeps it small.
+        bundled = [
+            name
+            for name in ("webview", "pystray", "PIL")
+            if importlib.util.find_spec(name) is not None
+        ]
+        if bundled:
+            print(f"self-test FAILED: headless build bundles {', '.join(bundled)}")
+            return 1
+        print("self-test OK: headless build")
+        return 0
     try:
         import webview  # noqa: F401
     except Exception as error:
@@ -1547,12 +2853,46 @@ def main():
     if "--self-test" in sys.argv[1:]:
         return self_test()
 
+    # Background-mode flags each run their own entry point and return from
+    # here, so none of them ever reaches the forwarded runner arguments below.
+    launcher_args = sys.argv[1:]
+    if _BACKGROUND_FLAG in launcher_args:
+        return _background_main()
+    if _BACKGROUND_WORKER_FLAG in launcher_args:
+        return _end_background_worker(_background_worker_main())
+    if _STOP_BACKGROUND_FLAG in launcher_args:
+        return _stop_background_main()
+    if _REGISTER_BACKGROUND_FLAG in launcher_args:
+        return _register_background_main()
+    if _UNREGISTER_BACKGROUND_FLAG in launcher_args:
+        return _unregister_background_main()
+    if _START_BACKGROUND_FLAG in launcher_args:
+        return _start_background_main()
+    if _BACKGROUND_STATUS_FLAG in launcher_args:
+        return _background_status_main()
+    # The background build has no window, so any other launch is its setup.
+    if _SETUP_FLAG in launcher_args or _is_headless_build():
+        # Miner threads that outlive the sign-in must not hold the exit.
+        return _end_background_worker(_setup_main())
+
     # A scripted/automation invocation (e.g. `--convert-only`) never opens a
     # window and does its work and exits - it's fine, and expected (e.g.
     # from an installer step or a script), for that to run alongside an
     # already-running desktop instance, so it's exempted from this check
     # entirely rather than treated as a second launch of the app itself.
     if "--convert-only" not in sys.argv[1:] and not _acquire_single_instance_lock():
+        if _background_instance_running():
+            # Background mining holds the same lock, so there is no window to
+            # bring forward - explain how to get the desktop window instead.
+            _message_box(
+                "Twitch Channel Points Miner is already running in the background "
+                "(background mode).\n\n"
+                "To use the desktop window instead, stop background mining from "
+                'the Start menu ("Stop background mining") and open the app again.',
+                "Twitch Channel Points Miner",
+                0x40,  # MB_ICONINFORMATION
+            )
+            return 0
         _notify_running_instance()
         _message_box(
             "Twitch Channel Points Miner is already running.\n\n"
@@ -1563,14 +2903,7 @@ def main():
         )
         return 0
 
-    exe_dir = application_directory()
-    application_dir = config_root_directory(exe_dir)
-    # For a standard build this may be a brand-new per-user AppData folder
-    # that has never existed before (nothing else creates it up front, as
-    # exe_dir always trivially exists already) - os.chdir() below requires
-    # it to exist first.
-    application_dir.mkdir(parents=True, exist_ok=True)
-    os.chdir(application_dir)
+    exe_dir, application_dir = _prepare_application_directories()
 
     console_buffer = ConsoleBuffer()
     install_console_capture(console_buffer)

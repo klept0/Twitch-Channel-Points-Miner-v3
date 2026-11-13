@@ -7,10 +7,13 @@ import builtins
 import errno
 import hashlib
 import os
+import re
 import shutil
 import stat
 import tempfile
 from pathlib import Path
+
+_LINE_PATTERN = re.compile(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+")
 
 CONFIG_VERSION = 12
 STREAMER_SETTINGS_DEFAULTS = (
@@ -37,7 +40,8 @@ LOGGER_SETTINGS_DEFAULTS = (
     ("date_format", '"dd/mm/yy"'),
     ("file_format", '"text"'),
     ("file_level", "logging.DEBUG"),
-    ("emoji", "True"),
+    # The runtime default: emoji stay off on Windows consoles.
+    ("emoji", 'platform.system() != "Windows"'),
     ("colored", "False"),
     ("color_palette", "ColorPalette()"),
     ("auto_clear", "True"),
@@ -227,7 +231,7 @@ def _commented_call_defaults(source, line_offsets, call, names):
         return []
     existing = {keyword.arg for keyword in call.keywords}
     missing = [name for name in names if name not in existing]
-    if not missing:
+    if not missing or call.end_lineno is None or call.end_col_offset is None:
         return []
 
     closing_offset = _source_offset(
@@ -241,7 +245,7 @@ def _commented_call_defaults(source, line_offsets, call, names):
         # call is nested in a single-line dictionary.
         return []
 
-    candidates = [*call.args, *call.keywords]
+    candidates: list[ast.expr | ast.keyword] = [*call.args, *call.keywords]
     if candidates:
         first = candidates[0]
         indent = source[
@@ -251,7 +255,14 @@ def _commented_call_defaults(source, line_offsets, call, names):
         ]
     else:
         call_line_start = line_offsets[call.lineno - 1]
-        indent = source[call_line_start : call_line_start + call.col_offset] + "    "
+        indent = (
+            source[
+                call_line_start : _source_offset(
+                    line_offsets, call.lineno, call.col_offset
+                )
+            ]
+            + "    "
+        )
     return [
         (
             closing_line_start,
@@ -327,19 +338,39 @@ def _enum_list_additions(
     ]
 
 
+class _LineOffsets(list):
+    """Character start offsets per line, plus the text of each line.
+
+    Lines end only at the tokenizer's line breaks (CRLF, CR, LF), not at every
+    character that str.splitlines() treats as a break.
+    """
+
+    __slots__ = ("lines",)
+    lines: list[str]
+
+
 def _line_start_offsets(source):
-    offsets = []
+    lines = _LINE_PATTERN.findall(source)
+    offsets = _LineOffsets()
     offset = 0
-    for line in source.splitlines(keepends=True):
+    for line in lines:
         offsets.append(offset)
         offset += len(line)
     if not offsets or offset == len(source):
         offsets.append(offset)
+    offsets.lines = lines
     return offsets
 
 
 def _source_offset(line_offsets, lineno, col_offset):
-    return line_offsets[lineno - 1] + col_offset
+    """Convert an ast (UTF-8 byte) column on a line to a character index."""
+    start = line_offsets[lineno - 1]
+    lines = line_offsets.lines
+    line = lines[lineno - 1] if lineno - 1 < len(lines) else ""
+    if line.isascii():
+        return start + col_offset
+    chars = len(line.encode("utf-8")[:col_offset].decode("utf-8", errors="ignore"))
+    return start + chars
 
 
 def _dict_entry_removal(source, line_offsets, tree, node, name):
@@ -415,9 +446,13 @@ def _closing_line_insertion(source, line_offsets, node, lines):
     )
     closing_line_start = line_offsets[node.end_lineno - 1]
     closing_prefix = source[closing_line_start:closing_offset]
+    candidates: list[ast.expr | ast.keyword]
+    final_candidates: list[ast.expr | ast.keyword]
     if isinstance(node, ast.Dict):
-        candidates = node.keys
-        final_candidates = node.values
+        # Callers only edit dicts whose keys are all literal strings
+        # (_dict_has_literal_string_keys), so no key is None here.
+        candidates = [key for key in node.keys if key is not None]
+        final_candidates = list(node.values)
     else:
         candidates = [
             *getattr(node, "args", []),
@@ -561,6 +596,12 @@ def migrate_config_source(source, source_name="config.py"):
                 and "import logging" not in required_imports
             ):
                 required_imports.append("import logging")
+            if (
+                any(item.startswith("emoji=") for item in missing)
+                and not _name_is_defined(tree, "platform")
+                and "import platform" not in required_imports
+            ):
+                required_imports.append("import platform")
             color_palette_import = (
                 "from TwitchChannelPointsMiner.logger import ColorPalette"
             )

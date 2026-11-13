@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from TwitchChannelPointsMiner.classes.DropAnalytics import DropAnalytics
+from TwitchChannelPointsMiner.classes.DropInventory import DropInventory
 from TwitchChannelPointsMiner.classes.entities.Campaign import Campaign
 from TwitchChannelPointsMiner.classes.gql.Errors import RetryError
 from TwitchChannelPointsMiner.classes.Twitch import (
@@ -62,9 +64,7 @@ def bare_twitch(monkeypatch, claim_status="ELIGIBLE_FOR_ALL"):
             status=claim_status, errors=[]
         )
     )
-    monkeypatch.setattr(
-        Twitch, "_Twitch__drop_variant_entries_from_drop", lambda self, drop: []
-    )
+    monkeypatch.setattr(DropAnalytics, "variant_entries", lambda self, drop: [])
     return twitch
 
 
@@ -920,9 +920,7 @@ def test_channel_verdicts_store_only_fresh_negative_results(monkeypatch):
 def test_accepted_claim_stops_applying_inventory_progress(monkeypatch):
     twitch = bare_twitch(monkeypatch)
     twitch.drop_inventory_minutes_by_drop_id = {"drop-1": 9, "drop-2": 5}
-    monkeypatch.setattr(
-        Twitch, "_Twitch__save_drop_claim_analytics", lambda *args, **kwargs: None
-    )
+    monkeypatch.setattr(DropAnalytics, "save_drop", lambda *args, **kwargs: None)
     drop = SimpleNamespace(id="drop-1", drop_instance_id="instance-1")
 
     assert twitch.claim_drop(drop) is True
@@ -957,13 +955,13 @@ def claim_recording_twitch(monkeypatch, statuses=("ELIGIBLE_FOR_ALL",)):
 
     twitch.gql = SimpleNamespace(claim_drop_rewards=claim_drop_rewards)
     monkeypatch.setattr(
-        Twitch,
-        "_Twitch__save_drop_claim_analytics",
+        DropAnalytics,
+        "save_drop",
         lambda *args, **kwargs: saved.append(args),
     )
     monkeypatch.setattr(
-        Twitch,
-        "_Twitch__drop_variant_entries_from_drop",
+        DropAnalytics,
+        "variant_entries",
         lambda self, drop: [{"name": "Reward"}],
     )
     twitch_module = importlib.import_module("TwitchChannelPointsMiner.classes.Twitch")
@@ -1994,9 +1992,7 @@ def test_accepted_drop_stays_finished_across_inventory_syncs(monkeypatch):
     twitch.gql.claim_drop_rewards = lambda drop_instance_id: SimpleNamespace(
         status="ELIGIBLE_FOR_ALL", errors=[]
     )
-    monkeypatch.setattr(
-        Twitch, "_Twitch__save_drop_claim_analytics", lambda *args, **kwargs: None
-    )
+    monkeypatch.setattr(DropAnalytics, "save_drop", lambda *args, **kwargs: None)
     assert twitch.claim_drop(drop) is True
     twitch.accepted_drop_claims = {}
     twitch._Twitch__cache_drop_inventory_progress(_daily_drop_inventory(campaign, 170))
@@ -2605,7 +2601,7 @@ def test_completed_reward_campaign_ids_suppress_stale_campaigns(monkeypatch):
         ]
     }
 
-    completed = twitch._Twitch__completed_campaign_ids_from_inventory(inventory)
+    completed = DropInventory(inventory).completed_campaign_ids()
     twitch.completed_drop_campaigns.update(completed)
 
     assert twitch.completed_drop_campaigns == {"campaign-1", "campaign-2"}
@@ -2653,7 +2649,6 @@ def test_completed_badge_campaign_signatures_matches_by_name_and_end_time(
 
 
 def test_all_claimed_inventory_drops_confirm_campaign_completion(monkeypatch):
-    twitch = bare_twitch(monkeypatch)
     data = campaign_data()
     data["timeBasedDrops"][0]["self"] = {
         "hasPreconditionsMet": True,
@@ -2662,9 +2657,9 @@ def test_all_claimed_inventory_drops_confirm_campaign_completion(monkeypatch):
         "isClaimed": True,
     }
 
-    completed = twitch._Twitch__completed_campaign_ids_from_inventory(
+    completed = DropInventory(
         {"dropCampaignsInProgress": [data]}
-    )
+    ).completed_campaign_ids()
 
     assert completed == {"campaign-1"}
 
@@ -2672,7 +2667,6 @@ def test_all_claimed_inventory_drops_confirm_campaign_completion(monkeypatch):
 def test_all_captured_unclaimed_inventory_drops_confirm_campaign_completion(
     monkeypatch,
 ):
-    twitch = bare_twitch(monkeypatch)
     data = campaign_data()
     data["timeBasedDrops"][0]["self"] = {
         "hasPreconditionsMet": True,
@@ -2681,15 +2675,14 @@ def test_all_captured_unclaimed_inventory_drops_confirm_campaign_completion(
         "isClaimed": False,
     }
 
-    completed = twitch._Twitch__completed_campaign_ids_from_inventory(
+    completed = DropInventory(
         {"dropCampaignsInProgress": [data]}
-    )
+    ).completed_campaign_ids()
 
     assert completed == {"campaign-1"}
 
 
 def test_partially_captured_inventory_campaign_is_not_completed(monkeypatch):
-    twitch = bare_twitch(monkeypatch)
     data = campaign_data()
     data["timeBasedDrops"].append(
         {
@@ -2714,9 +2707,9 @@ def test_partially_captured_inventory_campaign_is_not_completed(monkeypatch):
         "isClaimed": False,
     }
 
-    completed = twitch._Twitch__completed_campaign_ids_from_inventory(
+    completed = DropInventory(
         {"dropCampaignsInProgress": [data]}
-    )
+    ).completed_campaign_ids()
 
     assert completed == set()
 
@@ -2731,9 +2724,7 @@ def test_fully_captured_unclaimed_campaign_stops_category_watch(monkeypatch):
         "isClaimed": False,
     }
     twitch.completed_drop_campaigns.update(
-        twitch._Twitch__completed_campaign_ids_from_inventory(
-            {"dropCampaignsInProgress": [data]}
-        )
+        DropInventory({"dropCampaignsInProgress": [data]}).completed_campaign_ids()
     )
     twitch.category_campaign_eligibility[("example-game", "channel")] = (1, 1)
     stream = SimpleNamespace(
@@ -4560,9 +4551,7 @@ def test_inventory_allow_block_makes_an_advertised_listing_known(monkeypatch):
     inventory_campaign = campaign_data()
     inventory_campaign["allow"] = {"channels": None}
 
-    merged = twitch._Twitch__merge_campaign_inventory_progress(
-        advertised, inventory_campaign
-    )
+    merged = DropInventory.merge_campaign_progress(advertised, inventory_campaign)
 
     assert not twitch._Twitch__campaign_channels_unknown(merged)
 
@@ -4619,13 +4608,10 @@ def test_failed_details_keep_the_last_known_channel_scope(
 
 
 def test_null_inventory_allow_keeps_the_details_allow_list(monkeypatch):
-    twitch = bare_twitch(monkeypatch)
     details = {**campaign_data(), "allow": {"channels": [{"name": "costream"}]}}
     inventory_campaign = {**campaign_data(), "allow": None}
 
-    merged = twitch._Twitch__merge_campaign_inventory_progress(
-        details, inventory_campaign
-    )
+    merged = DropInventory.merge_campaign_progress(details, inventory_campaign)
 
     assert merged["allow"] == {"channels": [{"name": "costream"}]}
 
@@ -4699,7 +4685,6 @@ def test_failed_channel_query_treats_unknown_campaigns_like_discovery_does(
 def test_merge_keeps_the_fresh_allow_list_when_only_inventory_has_drops(
     monkeypatch,
 ):
-    twitch = bare_twitch(monkeypatch)
     details = {
         **campaign_data(),
         "allow": {"channels": [{"name": "costream"}]},
@@ -4708,9 +4693,7 @@ def test_merge_keeps_the_fresh_allow_list_when_only_inventory_has_drops(
     inventory_campaign = campaign_data()
     del inventory_campaign["allow"]
 
-    merged = twitch._Twitch__merge_campaign_inventory_progress(
-        details, inventory_campaign
-    )
+    merged = DropInventory.merge_campaign_progress(details, inventory_campaign)
 
     assert merged["allow"] == {"channels": [{"name": "costream"}]}
     assert merged["timeBasedDrops"] == inventory_campaign["timeBasedDrops"]

@@ -4,12 +4,22 @@ setlocal
 set BUILD_MODE=%~1
 if "%BUILD_MODE%"=="" set BUILD_MODE=portable
 
+rem "background" is the headless build for background mining: a standard
+rem install without the desktop window and tray (pywebview, pystray, Pillow),
+rem which keeps the download small. windows_launcher.py's _is_headless_build()
+rem reads build_flavor.txt to tell it apart.
+set INSTALL_MODE=%BUILD_MODE%
+set BUILD_FLAVOR=desktop
 if /I "%BUILD_MODE%"=="standard" (
   set EXE_NAME=TwitchChannelPointsMiner
 ) else if /I "%BUILD_MODE%"=="portable" (
   set EXE_NAME=TwitchChannelPointsMiner-Portable
+) else if /I "%BUILD_MODE%"=="background" (
+  set EXE_NAME=TwitchChannelPointsMiner-Background
+  set INSTALL_MODE=standard
+  set BUILD_FLAVOR=headless
 ) else (
-  echo Unknown build mode "%BUILD_MODE%" - expected "standard" or "portable".
+  echo Unknown build mode "%BUILD_MODE%" - expected "standard", "portable" or "background".
   exit /b 1
 )
 
@@ -18,7 +28,8 @@ rem bundled_file()) so standard-vs-portable behavior is fixed at build time,
 rem not inferred from anything the end user could change, like the exe's own
 rem filename - renaming a file is trivial and would otherwise silently flip
 rem behavior.
-echo %BUILD_MODE%> install_mode.txt
+echo %INSTALL_MODE%> install_mode.txt
+echo %BUILD_FLAVOR%> build_flavor.txt
 
 rem Also baked into the bundle - read back the same way, to show which
 rem commit a running build was made from (startup log line, dashboard
@@ -36,6 +47,13 @@ rem setup-python installed it into; the launcher picks the newest Python
 rem on the machine, which may not have PyInstaller.
 if not defined PYINSTALLER_PYTHON set PYINSTALLER_PYTHON=py
 
+rem The window and tray packages, or (headless) the excludes that keep them out.
+if /I "%BUILD_FLAVOR%"=="headless" (
+  set GUI_OPTIONS=--exclude-module webview --exclude-module pystray --exclude-module PIL
+) else (
+  set GUI_OPTIONS=--collect-all webview --collect-all pystray --hidden-import PIL.IcoImagePlugin --hidden-import PIL.PngImagePlugin
+)
+
 rem irc (since 20.5.0) reads irc\codes.txt at import time, and PyInstaller
 rem only bundles a package's data files when told to. Without it the exe dies
 rem on startup with FileNotFoundError - and as a --windowed exe that means an
@@ -48,20 +66,19 @@ rem error dialog, which hangs the CI smoke test instead of failing it.
   --name %EXE_NAME% ^
   --icon "assets\twitch-miner.ico" ^
   --collect-all TwitchChannelPointsMiner ^
-  --collect-all webview ^
-  --collect-all pystray ^
   --collect-data irc ^
-  --hidden-import PIL.IcoImagePlugin ^
-  --hidden-import PIL.PngImagePlugin ^
+  %GUI_OPTIONS% ^
   --add-data "assets;assets" ^
   --add-data "config.example.py;." ^
   --add-data "install_mode.txt;." ^
   --add-data "commit_hash.txt;." ^
+  --add-data "build_flavor.txt;." ^
   windows_launcher.py
 
 set BUILD_RESULT=%ERRORLEVEL%
 del install_mode.txt
 del commit_hash.txt
+del build_flavor.txt
 if not %BUILD_RESULT%==0 exit /b %BUILD_RESULT%
 
 echo.

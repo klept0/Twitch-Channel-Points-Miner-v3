@@ -50,9 +50,9 @@ class ColorPalette(object):
         setattr(self, "BET_LOSE", Fore.RED)
         setattr(self, "WATCH_STATUS", WATCH_STATUS_COLOR)
 
-        for k in kwargs:
-            if k.upper() in dir(self) and getattr(self, k.upper()) is not None:
-                if kwargs[k] in [
+        for name in kwargs:
+            if name.upper() in dir(self) and getattr(self, name.upper()) is not None:
+                if kwargs[name] in [
                     Fore.BLACK,
                     Fore.RED,
                     Fore.GREEN,
@@ -63,8 +63,8 @@ class ColorPalette(object):
                     Fore.WHITE,
                     Fore.RESET,
                 ]:
-                    setattr(self, k.upper(), kwargs[k])
-                elif kwargs[k].upper() in [
+                    setattr(self, name.upper(), kwargs[name])
+                elif kwargs[name].upper() in [
                     "BLACK",
                     "RED",
                     "GREEN",
@@ -75,7 +75,7 @@ class ColorPalette(object):
                     "WHITE",
                     "RESET",
                 ]:
-                    setattr(self, k.upper(), getattr(Fore, kwargs[k].upper()))
+                    setattr(self, name.upper(), getattr(Fore, kwargs[name].upper()))
 
     def get(self, key):
         color = getattr(self, str(key)) if str(key) in dir(self) else None
@@ -131,7 +131,7 @@ class LoggerSettings:
         less: bool = False,
         console_level: int = logging.INFO,
         console_username: bool = False,
-        time_zone: str or None = None,
+        time_zone: str | None = None,
         date_format: str = "dd/mm/yy",
         file_level: int = logging.DEBUG,
         emoji: bool = platform.system() != "Windows",
@@ -139,21 +139,21 @@ class LoggerSettings:
         color_palette: ColorPalette = ColorPalette(),
         auto_clear: bool = True,
         log_retention_days: int = 7,
-        telegram: Telegram or None = None,
-        discord: Discord or None = None,
-        webhook: Webhook or None = None,
-        matrix: Matrix or None = None,
-        pushover: Pushover or None = None,
-        gotify: Gotify or None = None,
-        ntfy: Ntfy or None = None,
-        email: Email or None = None,
+        telegram: Telegram | None = None,
+        discord: Discord | None = None,
+        webhook: Webhook | None = None,
+        matrix: Matrix | None = None,
+        pushover: Pushover | None = None,
+        gotify: Gotify | None = None,
+        ntfy: Ntfy | None = None,
+        email: Email | None = None,
         daily_report: bool = False,
         daily_report_time: str = "00:00",
-        username: str or None = None,
+        username: str | None = None,
         # Added last so existing positional calls keep their meaning.
         console_format: LoggingFormat | str = LoggingFormat.TEXT,
         file_format: LoggingFormat | str = LoggingFormat.TEXT,
-        apprise: Apprise or None = None,
+        apprise: Apprise | None = None,
     ):
         self.save = save
         self.less = less
@@ -462,7 +462,7 @@ class NotificationHandler(logging.Handler):
         == "https://discord.com/api/webhooks/0123456789/0a1B2c3D4e5F6g7H8i9J",
         "webhook": lambda notifier: notifier.endpoint == "https://example.com/webhook",
         "matrix": lambda notifier: notifier.room_id == "..."
-        or not notifier.access_token,
+        or notifier.password == "...",
         "pushover": lambda notifier: notifier.userkey == "YOUR-ACCOUNT-TOKEN"
         or notifier.token == "YOUR-APPLICATION-TOKEN",
         "gotify": lambda notifier: notifier.endpoint
@@ -478,7 +478,7 @@ class NotificationHandler(logging.Handler):
         self.settings = settings
         # Last failure reason of each provider that is currently failing, so
         # an outage is reported once rather than on every event.
-        self._failures = {}
+        self._failures: dict[str, str] = {}
 
     def has_providers(self):
         """Return True when at least one provider is set up to send."""
@@ -596,14 +596,14 @@ class LoggingQueueListener(QueueListener):
     NOTIFICATION_SHUTDOWN_TIMEOUT = 30
 
     def __init__(self, logger_queue, *handlers, settings, respect_handler_level=True):
-        self.notification_listener = None
+        self.notification_listener: QueueListener | None = None
         self._stop_lock = threading.Lock()
         self._stopped = False
         notification_handler = NotificationHandler(settings)
         if notification_handler.has_providers():
             # Logger settings changes restart the miner, so a notification
             # thread is only needed when a provider is set up at startup.
-            notification_queue = queue.Queue(-1)
+            notification_queue: queue.Queue[logging.LogRecord] = queue.Queue(-1)
             self.notification_listener = QueueListener(
                 notification_queue, notification_handler
             )
@@ -636,16 +636,20 @@ class LoggingQueueListener(QueueListener):
                     record = self.dequeue(False)
                 except queue.Empty:
                     break
-                if record is not self._sentinel:
+                # _sentinel is QueueListener's own end-of-queue marker.
+                if record is not self._sentinel:  # type: ignore[attr-defined]
                     self.handle(record)
 
     def _stop_notifications(self):
         # QueueListener.stop() joins without a timeout, so an unreachable
         # notifier with a backlog could hold up shutdown indefinitely.
         listener = self.notification_listener
+        thread = listener._thread if listener is not None else None
+        if listener is None or thread is None:
+            return
         listener.enqueue_sentinel()
-        listener._thread.join(self.NOTIFICATION_SHUTDOWN_TIMEOUT)
-        if listener._thread.is_alive():
+        thread.join(self.NOTIFICATION_SHUTDOWN_TIMEOUT)
+        if thread.is_alive():
             logging.getLogger(__name__).warning(
                 "Stopped waiting for notifications after "
                 f"{self.NOTIFICATION_SHUTDOWN_TIMEOUT} seconds; alerts still "
@@ -685,7 +689,7 @@ def configure_loggers(username, settings):
 
     # Queue handler that will handle the logger queue. The stdlib one is
     # enough unless a JSON handler needs the traceback kept apart.
-    logger_queue = queue.Queue(-1)
+    logger_queue: queue.Queue[logging.LogRecord] = queue.Queue(-1)
     writes_json = settings.console_format is LoggingFormat.JSON or (
         settings.save is True and settings.file_format is LoggingFormat.JSON
     )
@@ -715,6 +719,7 @@ def configure_loggers(username, settings):
     console_handler.addFilter(CategoryConsoleFilter(settings.console_level))
     console_handler.addFilter(NotificationOnlyFilter())
 
+    formatter: _TimezoneFormatter
     if settings.console_format is LoggingFormat.JSON:
         formatter = JsonFormatter(
             settings=settings,
@@ -739,6 +744,7 @@ def configure_loggers(username, settings):
     if settings.save is True:
         logs_path = os.path.join(Path().absolute(), "logs")
         Path(logs_path).mkdir(parents=True, exist_ok=True)
+        file_handler: logging.FileHandler
         if settings.auto_clear is True:
             logs_file = os.path.join(
                 logs_path,
@@ -754,13 +760,14 @@ def configure_loggers(username, settings):
             )
         else:
             # Every formatter resolves the same time zone, so reuse the console's.
-            tz = console_handler.formatter.timezone
+            tz = formatter.timezone
             logs_file = os.path.join(
                 logs_path,
                 f"{username}.{datetime.now(tz).strftime('%Y%m%d-%H%M%S')}.log",
             )
             file_handler = logging.FileHandler(logs_file, "w", "utf-8")
 
+        file_formatter: _TimezoneFormatter
         if settings.file_format is LoggingFormat.JSON:
             file_formatter = JsonFormatter(
                 settings=settings,

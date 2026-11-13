@@ -31,6 +31,25 @@ and shows a one-time confirmation dialog. Your original files are archived
 untouched in a `config-legacy` folder next to where the old executable was,
 so nothing is lost; this only happens once.
 
+### Installers
+
+Each release has three Standard installers. They install to the same place
+and keep the same data, so running a different one later switches between
+the desktop app and background mining.
+
+| Installer | Installs |
+| --- | --- |
+| `TwitchChannelPointsMiner-<version>-Online-Setup.exe` | Asks whether you want the desktop app or background mining only, then downloads just that program. Needs an internet connection while it runs. |
+| `TwitchChannelPointsMiner-<version>-Setup.exe` | The desktop app: a window with the dashboard and a tray icon. It can also mine in the background. |
+| `TwitchChannelPointsMiner-<version>-Background-Setup.exe` | Background mining only: a smaller program with no window or tray icon. |
+
+The online installer checks the SHA-256 of what it downloads against the
+value built into it, and installs nothing if they differ or the download
+fails. To install without it, use one of the two full installers. The
+programs it downloads are on the release page as
+`TwitchChannelPointsMiner-<version>-Desktop.exe` and
+`TwitchChannelPointsMiner-<version>-Background.exe`.
+
 ## Install the Windows executable
 
 1. Open the project's
@@ -98,11 +117,90 @@ logs are saved depends on which distribution you installed (see
   by itself after setup; move the entire `TwitchChannelPointsMiner` folder if
   you want it in a different location.
 
+## Run in the background
+
+Background mining runs the miner with no window or tray icon. Set it up in
+either of these ways:
+
+- Install background mining only, with the Background or Online installer
+  (see [Installers](#installers)).
+- In the desktop app's installer, select **Run in the background when you
+  sign in** on the **Select Additional Tasks** page.
+
+Both work the same way:
+
+- **What it does:** the miner starts with no window. If it crashes, it
+  restarts after 30 seconds, waiting longer (up to 10 minutes) if it keeps
+  crashing. It runs as your Windows user, with your normal settings, login
+  session, and logs.
+- **When it starts:** by default, when you sign in to Windows. The installer
+  creates a scheduled task named **Twitch Channel Points Miner
+  (background)** for your account; if Windows doesn't allow that, it adds a
+  startup entry instead. Background mining replaces **Start automatically
+  when you sign in**.
+- **Start at boot (optional):** select **Start when Windows starts, before
+  anyone signs in** (the desktop installer calls it **Also start when Windows
+  starts**). See [Start at boot](#start-at-boot).
+- **Sign in once first:** background mining can't show Twitch's activation
+  code. With the desktop app, open it once, enter your Twitch username and
+  sign in, then close it. With background mining only, the installer opens a
+  setup window that asks for your username and shows the activation code;
+  run **Set up background mining** from the Start menu to do it again. Until
+  then, background mining exits without mining and says why in
+  `logs\background.log`.
+- **Start, stop, and check it** from the Start menu:
+  - **Start background mining** starts it now, through the scheduled task
+    when there is one. If you haven't signed in to Twitch yet, it opens the
+    sign-in instead.
+  - **Stop background mining** finishes the session cleanly, like closing the
+    window does.
+  - **Background mining status** says whether it's running and when it
+    starts, and shows the last line of its log.
+  - **Background mining logs** opens the `logs` folder of
+    `%LOCALAPPDATA%\TwitchChannelPointsMiner`:
+    - `background.log`: starts, stops, crashes, and restarts.
+    - `background-worker.log`: the miner's console output.
+    - The miner's own log files, as described in [Logs](logs.md).
+
+  The [analytics dashboard](analytics.md) also works in your browser if it's
+  enabled.
+- **One miner at a time:** while background mining runs, the desktop app
+  won't open, and the other way round. Stop background mining first.
+- **Updates and repairs:** the installer stops background mining before it
+  replaces the program and sets it up again afterwards.
+- **Turn it off:** run the desktop installer again and clear the option, or
+  install the desktop app over background mining only. Uninstalling also
+  stops background mining and removes the task. None of these touch your
+  settings, Twitch login, analytics, or logs.
+
+### Start at boot
+
+With this option, the scheduled task also runs when Windows starts, whether
+or not anyone signs in, so the miner keeps mining while you're signed out.
+
+- **Administrator permission:** creating a task that runs before sign-in
+  needs one administrator (UAC) prompt while installing. If you decline it,
+  or it fails, background mining starts when you sign in instead, and
+  `logs\background.log` says why.
+- **Account:** the task still runs as your own account, and Windows doesn't
+  store your password for it. Because of that, it can reach the internet but
+  not network shares, so keep the miner's data in your user profile (the
+  default).
+- **Account rights:** Windows runs such a task with the **Log on as a batch
+  job** right. Administrator accounts have it. If the task doesn't start on a
+  standard account, run **Background mining status** to check, and grant the
+  right in Local Security Policy, or turn the option off.
+- **After you sign in:** the miner started at boot keeps running, and signing
+  out doesn't stop it. Use **Stop background mining** to stop it.
+
+To supervise a source checkout instead, see [supervisor](supervisor.md).
+
 ## Update the miner
 
-- **Standard:** download and run the newest `-Setup.exe` from the
+- **Standard:** download and run the newest installer from the
   [Releases page](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/releases)
-  and follow its prompts; it updates the installed program in place. Your
+  and follow its prompts; it updates the installed program in place. The
+  online installer offers what you chose last time. Your
   configuration and login data live outside the install directory and are
   never affected.
 - **Portable:**

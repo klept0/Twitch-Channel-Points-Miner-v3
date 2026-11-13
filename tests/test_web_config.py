@@ -1994,3 +1994,286 @@ def test_insert_config_item_refuses_to_write_unparseable_config(tmp_path, monkey
         config_editor._set_dict_items(config, "VALUES", {"c": "3"})
 
     assert config.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    "provider, module_name",
+    [
+        ("telegram", "Telegram"),
+        ("discord", "Discord"),
+        ("webhook", "Webhook"),
+        ("email", "Email"),
+        ("matrix", "Matrix"),
+        ("pushover", "Pushover"),
+        ("gotify", "Gotify"),
+        ("ntfy", "Ntfy"),
+    ],
+)
+def test_notification_constructor_required_matches_signatures(provider, module_name):
+    import importlib
+    import inspect
+
+    module = importlib.import_module(f"TwitchChannelPointsMiner.classes.{module_name}")
+    parameters = inspect.signature(getattr(module, module_name)).parameters
+    required = {
+        name
+        for name, parameter in parameters.items()
+        if parameter.default is inspect.Parameter.empty
+    }
+
+    assert config_editor.NOTIFICATION_CONSTRUCTOR_REQUIRED[provider] == required
+
+
+@pytest.mark.parametrize(
+    "provider, values, missing",
+    [
+        (
+            "webhook",
+            {"endpoint": "https://hooks.example/x", "events": ["DROP_CLAIM"]},
+            "method",
+        ),
+        (
+            "pushover",
+            {"userkey": "u", "token": "t", "events": ["DROP_CLAIM"], "priority": 0},
+            "sound",
+        ),
+        (
+            "gotify",
+            {"endpoint": "https://gotify.example", "events": ["DROP_CLAIM"]},
+            "priority",
+        ),
+        ("ntfy", {"topic": "miner-alerts"}, "events"),
+    ],
+)
+def test_enabling_notification_requires_constructor_arguments(
+    tmp_path, provider, values, missing
+):
+    config = tmp_path / "config.py"
+    write_config(config)
+    original = config.read_text(encoding="utf-8")
+
+    with pytest.raises(ConfigEditError, match=f"{provider} requires: {missing}"):
+        update_managed_web_config(
+            config,
+            {
+                "action": "update_notification",
+                "provider": provider,
+                "values": {"enabled": True, **values},
+            },
+        )
+
+    assert config.read_text(encoding="utf-8") == original
+
+
+def test_enabled_webhook_saved_from_dashboard_loads(tmp_path):
+    config = tmp_path / "config.py"
+    write_config(config)
+
+    update_managed_web_config(
+        config,
+        {
+            "action": "update_notification",
+            "provider": "webhook",
+            "values": {
+                "enabled": True,
+                "endpoint": "https://hooks.example/x",
+                "method": "POST",
+                "events": [],
+            },
+        },
+    )
+
+    webhook = _load_config(config).MINER_CONFIG["logger_settings"].webhook
+    assert webhook.endpoint == "https://hooks.example/x"
+    assert webhook.method == "POST"
+    assert webhook.events == []
+
+
+COMMENTED_STREAMERS = """\
+STREAMERS = [
+    # Favourites first.
+    Streamer("one", settings=StreamerSettings(favorite=True)),  # main channel
+    "two",  # second
+    # Weekend streams.
+    "three",
+    EXTRA_STREAMER,
+]
+"""
+
+
+def write_commented_config(path, streamers=COMMENTED_STREAMERS):
+    write_config(path)
+    source = path.read_text(encoding="utf-8")
+    source = source.replace(
+        'STREAMERS = [Streamer("one", settings=StreamerSettings(favorite=True)), "two"]\n',
+        'EXTRA_STREAMER = "extra"\n' + streamers,
+    )
+    path.write_text(source, encoding="utf-8")
+
+
+def _usernames(config):
+    return [
+        getattr(streamer, "username", streamer)
+        for streamer in _load_config(config).STREAMERS
+    ]
+
+
+def test_streamer_edits_keep_comments_and_unmanaged_entries(tmp_path):
+    config = tmp_path / "config.py"
+    write_commented_config(config)
+
+    update_managed_web_config(
+        config, {"action": "add", "kind": "streamers", "value": "four"}
+    )
+    update_managed_web_config(
+        config,
+        {"action": "reorder_streamers", "usernames": ["three", "one", "two", "four"]},
+    )
+    update_managed_web_config(
+        config, {"action": "remove", "kind": "streamers", "value": "two"}
+    )
+    update_managed_web_config(
+        config,
+        {
+            "action": "update_streamer",
+            "username": "three",
+            "settings": {"chat": "NEVER"},
+        },
+    )
+
+    source = config.read_text(encoding="utf-8")
+    for comment in ("# Favourites first.", "# main channel", "# Weekend streams."):
+        assert comment in source
+    assert "EXTRA_STREAMER," in source
+    # A comment after an entry on its line moves with the entry.
+    assert (
+        'Streamer("one", settings=StreamerSettings(favorite=True)),  # main channel'
+        in source
+    )
+    assert '    "four",\n]' in source
+    assert _usernames(config) == ["three", "one", "extra", "four"]
+    loaded = _load_config(config)
+    assert loaded.STREAMERS[0].settings.chat is ChatPresence.NEVER
+    assert loaded.STREAMERS[1].settings.favorite is True
+
+
+def test_update_streamer_writes_only_changed_settings(tmp_path):
+    config = tmp_path / "config.py"
+    write_config(config)
+
+    update_managed_web_config(
+        config,
+        {
+            "action": "update_streamer",
+            "username": "two",
+            "settings": {"favorite": True},
+        },
+    )
+
+    assert (
+        'STREAMERS = [Streamer("one", settings=StreamerSettings(favorite=True)), '
+        'Streamer("two", settings=StreamerSettings(favorite=True))]'
+    ) in config.read_text(encoding="utf-8")
+
+
+def test_update_streamer_edits_positional_settings_without_duplicating(tmp_path):
+    config = tmp_path / "config.py"
+    write_commented_config(
+        config,
+        'STREAMERS = [Streamer("one", StreamerSettings(favorite=True)), "two"]\n',
+    )
+
+    update_managed_web_config(
+        config,
+        {
+            "action": "update_streamer",
+            "username": "one",
+            "settings": {"chat": "ALWAYS"},
+        },
+    )
+
+    assert "settings=" not in config.read_text(encoding="utf-8").split("STREAMERS")[1]
+    loaded = _load_config(config)
+    assert loaded.STREAMERS[0].settings.favorite is True
+    assert loaded.STREAMERS[0].settings.chat is ChatPresence.ALWAYS
+
+
+def test_update_streamer_refuses_settings_defined_elsewhere(tmp_path):
+    config = tmp_path / "config.py"
+    write_commented_config(
+        config,
+        "ONE_SETTINGS = StreamerSettings(favorite=True, make_predictions=False)\n"
+        'STREAMERS = [Streamer("one", settings=ONE_SETTINGS), "two"]\n',
+    )
+    before = config.read_text(encoding="utf-8")
+
+    with pytest.raises(ConfigEditError, match="Edit them in config.py"):
+        update_managed_web_config(
+            config,
+            {
+                "action": "update_streamer",
+                "username": "one",
+                "settings": {"chat": "NEVER"},
+            },
+        )
+
+    assert config.read_text(encoding="utf-8") == before
+
+
+@pytest.mark.parametrize(
+    "streamers, removed, expected",
+    [
+        ('STREAMERS = ["one", "two", "three"]\n', "one", ["two", "three"]),
+        ('STREAMERS = ["one", "two", "three"]\n', "two", ["one", "three"]),
+        ('STREAMERS = ["one", "two", "three"]\n', "three", ["one", "two"]),
+        ('STREAMERS = ["one",]\n', "one", []),
+        ('STREAMERS = [\n    "one",\n    "two",\n]\n', "two", ["one"]),
+        ('STREAMERS = [\n    "one",\n    "two",\n]\n', "one", ["two"]),
+    ],
+)
+def test_removing_streamers_keeps_the_list_valid(
+    tmp_path, streamers, removed, expected
+):
+    config = tmp_path / "config.py"
+    write_commented_config(config, streamers)
+
+    update_managed_web_config(
+        config, {"action": "remove", "kind": "streamers", "value": removed}
+    )
+
+    assert _usernames(config) == expected
+
+
+def test_web_config_actions_match_the_actions_handled():
+    # WebConfigAction documents the update payloads; keep it in step with
+    # the actions _update_managed_web_config() handles.
+    import ast
+    import inspect
+
+    source = inspect.getsource(config_editor._update_managed_web_config)
+    handled = set()
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Compare)
+            and isinstance(node.left, ast.Name)
+            and node.left.id == "action"
+        ):
+            for comparator in node.comparators:
+                for constant in ast.walk(comparator):
+                    if isinstance(constant, ast.Constant) and isinstance(
+                        constant.value, str
+                    ):
+                        handled.add(constant.value)
+
+    assert handled == config_editor.WEB_CONFIG_ACTIONS
+
+
+def test_read_managed_web_config_returns_every_web_config_key(tmp_path):
+    config = tmp_path / "config.py"
+    write_config(config)
+
+    data = config_editor.read_managed_web_config(config)
+
+    assert set(data) == set(config_editor.WebConfig.__annotations__)
+    for provider, state in data["notifications"].items():
+        assert set(state) == set(config_editor.NotificationState.__annotations__)

@@ -5,6 +5,20 @@ on:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: >-
+          Publish an existing release again (Docker image, Windows files,
+          issue closing) instead of running Release Please. Use it when a
+          run created the release and then failed: a re-run sees no new
+          release and skips publishing.
+        required: false
+        default: ''
+      mark_latest:
+        description: With release_tag, also mark that release as the latest release.
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: write
@@ -15,10 +29,23 @@ jobs:
     name: Create release
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.release_retry_2.outputs.release_created || steps.release_retry_1.outputs.release_created || steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release_retry_2.outputs.tag_name || steps.release_retry_1.outputs.tag_name || steps.release.outputs.tag_name }}
+      release_created: ${{ steps.existing.outputs.release_created || steps.release_retry_2.outputs.release_created || steps.release_retry_1.outputs.release_created || steps.release.outputs.release_created }}
+      tag_name: ${{ steps.existing.outputs.tag_name || steps.release_retry_2.outputs.tag_name || steps.release_retry_1.outputs.tag_name || steps.release.outputs.tag_name }}
     steps:
+      - name: Use the requested existing release
+        if: ${{ inputs.release_tag }}
+        id: existing
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName > /dev/null
+          echo "release_created=true" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
       - name: Run Release Please
+        if: ${{ !inputs.release_tag }}
         id: release
         continue-on-error: true
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
@@ -54,11 +81,11 @@ jobs:
       # -post.N suffix (see AGENTS.md, Fork versioning). They are real
       # releases, so publish them as the latest release, not a pre-release.
       - name: Publish fork release as latest
-        if: (steps.release_retry_2.outputs.release_created || steps.release_retry_1.outputs.release_created || steps.release.outputs.release_created) == 'true'
+        if: (steps.release_retry_2.outputs.release_created || steps.release_retry_1.outputs.release_created || steps.release.outputs.release_created) == 'true' || (steps.existing.outputs.release_created == 'true' && inputs.mark_latest)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release_retry_2.outputs.tag_name || steps.release_retry_1.outputs.tag_name || steps.release.outputs.tag_name }}
+          RELEASE_TAG: ${{ steps.existing.outputs.tag_name || steps.release_retry_2.outputs.tag_name || steps.release_retry_1.outputs.tag_name || steps.release.outputs.tag_name }}
         run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
 
       - name: Checkout link automation
@@ -75,7 +102,7 @@ jobs:
         continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          RELEASE_TAG: ${{ steps.release_retry_2.outputs.tag_name || steps.release_retry_1.outputs.tag_name || steps.release.outputs.tag_name }}
+          RELEASE_TAG: ${{ steps.existing.outputs.tag_name || steps.release_retry_2.outputs.tag_name || steps.release_retry_1.outputs.tag_name || steps.release.outputs.tag_name }}
         with:
           script: |
             const automation = require('./.github/scripts/release-pull-links.js');
@@ -135,7 +162,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        flavor: [standard, portable]
+        flavor: [standard, portable, background]
     steps:
       - name: Checkout released source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -167,14 +194,18 @@ jobs:
         env:
           FLAVOR: ${{ matrix.flavor }}
         run: |
-          $exeName = if ($env:FLAVOR -eq "standard") { "TwitchChannelPointsMiner.exe" } else { "TwitchChannelPointsMiner-Portable.exe" }
+          $exeName = switch ($env:FLAVOR) {
+            "standard" { "TwitchChannelPointsMiner.exe" }
+            "portable" { "TwitchChannelPointsMiner-Portable.exe" }
+            "background" { "TwitchChannelPointsMiner-Background.exe" }
+          }
           # --windowed is a GUI-subsystem exe, so a plain call here returns
           # before the process actually finishes and leaves $LASTEXITCODE
           # stale/empty; Start-Process -Wait is needed to block on it and
           # get its real exit code.
           $proc = Start-Process -FilePath "dist\$exeName" -ArgumentList "--self-test" -Wait -PassThru
           if ($proc.ExitCode -ne 0) {
-            throw "Smoke test failed (exit code $($proc.ExitCode)) - the built exe is missing a GUI dependency"
+            throw "Smoke test failed (exit code $($proc.ExitCode)) - the built exe is missing a GUI dependency, or the background build includes one"
           }
 
       - name: Upload built executable
@@ -209,6 +240,12 @@ jobs:
           name: windows-exe-portable
           path: dist
 
+      - name: Download background executable
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-exe-background
+          path: dist
+
       - name: Package executable zip
         id: package
         shell: pwsh
@@ -220,7 +257,9 @@ jobs:
           Compress-Archive -Path "dist/TwitchChannelPointsMiner-Portable.exe" -DestinationPath "dist/$zipName" -Force
           "zip_path=dist/$zipName" >> $env:GITHUB_OUTPUT
 
-      - name: Build Windows installer
+      # The online installer downloads -Desktop.exe or -Background.exe from
+      # this release and checks it against the SHA-256 compiled in here.
+      - name: Build Windows installers
         id: installer
         shell: pwsh
         env:
@@ -237,17 +276,45 @@ jobs:
           if (-not (Test-Path $compiler)) {
             throw "Inno Setup compiler was not found at $compiler after installation"
           }
-          & $compiler "/DMyAppVersion=$version" "windows_installer.iss"
+          $desktop = "dist/TwitchChannelPointsMiner-$version-Desktop.exe"
+          $background = "dist/TwitchChannelPointsMiner-$version-Background.exe"
+          Copy-Item dist/TwitchChannelPointsMiner.exe $desktop
+          Copy-Item dist/TwitchChannelPointsMiner-Background.exe $background
+          $desktopSha = (Get-FileHash $desktop -Algorithm SHA256).Hash
+          $backgroundSha = (Get-FileHash $background -Algorithm SHA256).Hash
+          # One call per installer; @args passes that installer's options.
+          function Build-Installer {
+            & $compiler "/DMyAppVersion=$version" @args "windows_installer.iss"
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
+          Build-Installer
+          Build-Installer "/DPayload=background"
+          Build-Installer "/DPayload=online" "/DDesktopSha256=$desktopSha" "/DBackgroundSha256=$backgroundSha" "/DReleaseRepo=$env:GITHUB_REPOSITORY" "/DReleaseTag=$env:RELEASE_TAG"
+          "installer_path=dist/TwitchChannelPointsMiner-$version-Setup.exe" >> $env:GITHUB_OUTPUT
+          "background_installer_path=dist/TwitchChannelPointsMiner-$version-Background-Setup.exe" >> $env:GITHUB_OUTPUT
+          "online_installer_path=dist/TwitchChannelPointsMiner-$version-Online-Setup.exe" >> $env:GITHUB_OUTPUT
+          "desktop_payload_path=$desktop" >> $env:GITHUB_OUTPUT
+          "background_payload_path=$background" >> $env:GITHUB_OUTPUT
+
+      # gh release upload only adds the files. softprops/action-gh-release
+      # also rewrote the release body from a copy it read earlier, which could
+      # drop the Docker image block publish_docker writes at the same time.
+      # --clobber replaces the files when publishing an existing release again.
+      - name: Upload Windows artifacts to release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release_please.outputs.tag_name }}
+          ZIP_PATH: ${{ steps.package.outputs.zip_path }}
+          INSTALLER_PATH: ${{ steps.installer.outputs.installer_path }}
+          BACKGROUND_INSTALLER_PATH: ${{ steps.installer.outputs.background_installer_path }}
+          ONLINE_INSTALLER_PATH: ${{ steps.installer.outputs.online_installer_path }}
+          DESKTOP_PAYLOAD_PATH: ${{ steps.installer.outputs.desktop_payload_path }}
+          BACKGROUND_PAYLOAD_PATH: ${{ steps.installer.outputs.background_payload_path }}
+        run: |
+          gh release upload "$env:RELEASE_TAG" "$env:ZIP_PATH" "$env:INSTALLER_PATH" "$env:BACKGROUND_INSTALLER_PATH" "$env:ONLINE_INSTALLER_PATH" "$env:DESKTOP_PAYLOAD_PATH" "$env:BACKGROUND_PAYLOAD_PATH" --clobber --repo "$env:GITHUB_REPOSITORY"
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
-          "installer_path=dist/TwitchChannelPointsMiner-$version-Setup.exe" >> $env:GITHUB_OUTPUT
-
-      - name: Upload Windows artifacts to release
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
-        with:
-          tag_name: ${{ needs.release_please.outputs.tag_name }}
-          files: |
-            ${{ steps.package.outputs.zip_path }}
-            ${{ steps.installer.outputs.installer_path }}
-          fail_on_unmatched_files: true
