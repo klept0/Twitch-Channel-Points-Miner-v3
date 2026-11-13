@@ -1,6 +1,7 @@
 import logging
 import socket
 import ssl
+import threading
 import types
 from unittest.mock import MagicMock, call
 
@@ -39,7 +40,7 @@ def test_irc_tls_available_returns_true_on_successful_handshake(monkeypatch):
     assert Chat._irc_tls_available() is True
 
 
-def test_irc_tls_available_returns_false_and_caches_on_failure(monkeypatch):
+def test_irc_tls_available_returns_false_and_does_not_cache_failure(monkeypatch):
     calls = 0
 
     def failing_connect(address, timeout=None):
@@ -51,8 +52,26 @@ def test_irc_tls_available_returns_false_and_caches_on_failure(monkeypatch):
 
     assert Chat._irc_tls_available() is False
     assert Chat._irc_tls_available() is False
-    # The probe result is cached after the first attempt, so a network
-    # blip only costs one failed handshake for the life of the process.
+    # A failed probe is not cached, so the next connect tries TLS again.
+    assert calls == 2
+    assert Chat._tls_supported is None
+
+
+def test_irc_tls_available_caches_successful_probe(monkeypatch):
+    calls = 0
+
+    def succeeding_connect(address, timeout=None):
+        nonlocal calls
+        calls += 1
+        return FakeSocket()
+
+    monkeypatch.setattr(socket, "create_connection", succeeding_connect)
+    monkeypatch.setattr(
+        ssl.SSLContext, "wrap_socket", lambda self, sock, server_hostname=None: sock
+    )
+
+    assert Chat._irc_tls_available() is True
+    assert Chat._irc_tls_available() is True
     assert calls == 1
 
 
@@ -66,14 +85,37 @@ def test_client_irc_uses_tls_port_and_wrapped_factory_when_available(monkeypatch
     assert "connect_factory" in client._SingleServerIRCBot__connect_params
 
 
-def test_client_irc_falls_back_to_plaintext_port_when_tls_unavailable(monkeypatch):
+def test_client_irc_uses_plaintext_port_when_explicitly_allowed(monkeypatch):
     monkeypatch.setattr(Chat, "_irc_tls_available", lambda: False)
+    monkeypatch.setenv("TCPM_ALLOW_PLAINTEXT_IRC", "1")
 
     client = ClientIRC("someuser", "sometoken", "somechannel")
 
     server = client.servers.peek()
     assert server.port == IRC_PORT
     assert "connect_factory" not in client._SingleServerIRCBot__connect_params
+
+
+def test_client_irc_refuses_plaintext_when_tls_unavailable(monkeypatch):
+    monkeypatch.setattr(Chat, "_irc_tls_available", lambda: False)
+    monkeypatch.delenv("TCPM_ALLOW_PLAINTEXT_IRC", raising=False)
+
+    with pytest.raises(Chat.IRCTLSUnavailable):
+        ClientIRC("someuser", "sometoken", "somechannel")
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES", " on "])
+def test_plaintext_irc_allowed_for_truthy_values(monkeypatch, value):
+    monkeypatch.setenv("TCPM_ALLOW_PLAINTEXT_IRC", value)
+
+    assert Chat._plaintext_irc_allowed() is True
+
+
+@pytest.mark.parametrize("value", ["", "0", "no"])
+def test_plaintext_irc_not_allowed_for_falsy_values(monkeypatch, value):
+    monkeypatch.setenv("TCPM_ALLOW_PLAINTEXT_IRC", value)
+
+    assert Chat._plaintext_irc_allowed() is False
 
 
 def test_irc_tls_context_requires_tls12_and_verifies_hostname():
@@ -107,6 +149,7 @@ def _subgift(**overrides):
 
 def _client_with(monkeypatch, **settings_values):
     monkeypatch.setattr(Chat, "_irc_tls_available", lambda: False)
+    monkeypatch.setenv("TCPM_ALLOW_PLAINTEXT_IRC", "1")
     settings = None
     if settings_values:
         settings = StreamerSettings(**settings_values)
@@ -310,3 +353,59 @@ def test_thread_chat_run_passes_settings_to_client(monkeypatch):
     thread.run()
 
     assert created["kwargs"] == {"settings": sentinel}
+
+
+def test_thread_chat_is_a_daemon_thread():
+    assert ThreadChat("u", "t", "c").daemon is True
+
+
+def test_thread_chat_stopped_while_connecting_never_joins(monkeypatch):
+    # stop() used to do nothing while ClientIRC was still being created.
+    started = []
+    thread = ThreadChat("u", "t", "c")
+
+    class SlowClient:
+        def __init__(self, *_args, **_kwargs):
+            thread.stop()
+
+        def start(self):
+            started.append(True)
+
+    monkeypatch.setattr(Chat, "ClientIRC", SlowClient)
+
+    thread.run()
+
+    assert started == []
+    assert thread.chat_irc is None
+
+
+def test_client_irc_stopped_before_start_does_not_connect(monkeypatch):
+    monkeypatch.setattr(Chat, "_irc_tls_available", lambda: False)
+    monkeypatch.setenv("TCPM_ALLOW_PLAINTEXT_IRC", "1")
+    client = ClientIRC("someuser", "sometoken", "somechannel")
+    connects = []
+    monkeypatch.setattr(client, "_connect", lambda: connects.append(True))
+
+    client.die()
+    # In a thread: before the fix, start() looped forever after die().
+    runner = threading.Thread(target=client.start, daemon=True)
+    runner.start()
+    runner.join(timeout=5)
+
+    assert not runner.is_alive()
+    assert connects == []
+
+
+def test_thread_chat_run_skips_join_without_tls_or_opt_in(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(Chat, "_irc_tls_available", lambda: False)
+    monkeypatch.delenv("TCPM_ALLOW_PLAINTEXT_IRC", raising=False)
+    thread = ThreadChat("u", "t", "c")
+
+    thread.run()
+
+    assert thread.chat_irc is None
+    assert any(
+        r.levelno == logging.WARNING and "TCPM_ALLOW_PLAINTEXT_IRC" in r.getMessage()
+        for r in caplog.records
+    )

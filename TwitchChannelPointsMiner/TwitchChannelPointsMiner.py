@@ -18,6 +18,7 @@ from pathlib import Path
 
 from TwitchChannelPointsMiner import __version__
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence, ThreadChat
+from TwitchChannelPointsMiner.classes.CopyOnWriteList import CopyOnWriteList
 from TwitchChannelPointsMiner.classes.DropBadgeCatalog import DropBadgeCatalog
 from TwitchChannelPointsMiner.classes.entities.Campaign import (
     CampaignChannelScope,
@@ -584,7 +585,9 @@ class TwitchChannelPointsMiner:
         self.claim_drops_startup = claim_drops_startup
         self.priority = priority if isinstance(priority, list) else [priority]
 
-        self.streamers: list[Streamer] = []
+        # Shared by reference with worker threads that read them without a
+        # lock while retirement and reloads change them; see CopyOnWriteList.
+        self.streamers: CopyOnWriteList = CopyOnWriteList()
         self.events_predictions = {}
         self.minute_watcher_thread = None
         self.sync_campaigns_thread = None
@@ -593,7 +596,7 @@ class TwitchChannelPointsMiner:
         self.session_id = str(uuid.uuid4())
         self.running = False
         self.start_datetime = None
-        self.original_streamers = []
+        self.original_streamers = CopyOnWriteList()
         self.original_drop_progress = None
         # Reentrant: end() can run as a signal handler on the main thread while
         # that thread already holds it (e.g. mid category refresh).
@@ -744,6 +747,7 @@ class TwitchChannelPointsMiner:
                 username=self.username,
                 password=password,
                 log_poll_interval=log_poll_interval,
+                logs_file=self.logs_file,
             )
             http_server.daemon = True
             http_server.name = "Analytics Thread"
@@ -839,6 +843,17 @@ class TwitchChannelPointsMiner:
                 # Flush the alert above even if stopping a worker failed.
                 self.queue_listener.stop()
                 _exit_after_crash()
+        else:
+            # run() also returns when Twitch stops the miner without asking
+            # for a restart (e.g. the cached login can't be cleared). Stop the
+            # workers then, or the process lingers with nothing running and a
+            # container restart policy never recovers it. A requested restart
+            # replaces the process, and end() has already stopped them.
+            restart_requested = getattr(self.twitch, "restart_requested", None)
+            if self.running and not (
+                restart_requested is not None and restart_requested.is_set()
+            ):
+                self.__stop_workers()
 
     def run(
         self,
@@ -1244,9 +1259,9 @@ class TwitchChannelPointsMiner:
                                 f"Failed to load streamer {username}", exc_info=True
                             )
 
-            self.streamers = [
+            self.streamers = CopyOnWriteList(
                 streamer for streamer in loaded_streamers if streamer is not None
-            ]
+            )
 
             # Populate the streamers with default values.
             # 1. Load channel points and auto-claim bonus
@@ -1254,15 +1269,15 @@ class TwitchChannelPointsMiner:
             # 3. DEACTIVATED: Check if the user is a moderator. (was used before the 5th of April 2021 to deactivate predictions)
             invalid_streamers = self.twitch.initialize_streamers_context(self.streamers)
             if invalid_streamers:
-                self.streamers = [
+                self.streamers = CopyOnWriteList(
                     streamer
                     for streamer in self.streamers
                     if streamer.username not in invalid_streamers
-                ]
+                )
 
-            self.original_streamers = [
+            self.original_streamers = CopyOnWriteList(
                 streamer.channel_points for streamer in self.streamers
-            ]
+            )
             if Settings.logger.daily_report is True and self.daily_report_date is None:
                 self.daily_report_streamers = {
                     streamer.username: streamer.channel_points
@@ -1507,7 +1522,15 @@ class TwitchChannelPointsMiner:
                 logger.info(
                     f"#{websocket.index} - The last PING was sent more than 10 minutes ago. Reconnecting to the WebSocket..."
                 )
-                WebSocketsPool.handle_reconnection(websocket)
+                # Reconnecting waits at least 30 seconds, and longer while
+                # offline; on this thread it would hold up the daily report,
+                # the category refresh and restart requests.
+                threading.Thread(
+                    target=WebSocketsPool.handle_reconnection,
+                    args=(websocket,),
+                    name=f"WebSocket #{websocket.index} reconnection",
+                    daemon=True,
+                ).start()
 
     def __refresh_channel_points_context(self):
         for streamer in list(self.streamers):

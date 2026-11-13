@@ -1,4 +1,5 @@
 import logging
+import os
 import socket
 import ssl
 import time
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 _tls_probe_lock = Lock()
 _tls_supported = None
+ALLOW_PLAINTEXT_IRC_ENV = "TCPM_ALLOW_PLAINTEXT_IRC"
 
 DEFAULT_GIFT_SUB_MESSAGE = "Thanks for the sub!"
 # Twitch rejects chat messages longer than 500 characters.
@@ -66,27 +68,37 @@ def _irc_tls_context():
     return context
 
 
+class IRCTLSUnavailable(Exception):
+    """TLS to Twitch IRC failed and plaintext IRC was not explicitly allowed."""
+
+
+def _plaintext_irc_allowed():
+    """Plaintext IRC sends the OAuth token unencrypted, so it is opt-in."""
+    value = os.environ.get(ALLOW_PLAINTEXT_IRC_ENV, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _irc_tls_available(host=IRC, port=IRC_TLS_PORT, timeout=5):
-    """Probe once per process whether a TLS handshake to Twitch's IRC endpoint
-    succeeds. The chat OAuth token is otherwise sent over plaintext port 6667 -
-    prefer TLS when it's reachable, but keep working on networks that block or
-    intercept 6697 by falling back to plaintext."""
+    """Check whether a TLS handshake to Twitch's IRC endpoint succeeds. A
+    success is cached for the process; a failure is not cached, so the next
+    connect probes again. The chat OAuth token is never sent over plaintext
+    unless TCPM_ALLOW_PLAINTEXT_IRC is set."""
     global _tls_supported
     with _tls_probe_lock:
-        if _tls_supported is None:
-            try:
-                context = _irc_tls_context()
-                with socket.create_connection((host, port), timeout=timeout) as sock:
-                    with context.wrap_socket(sock, server_hostname=host):
-                        _tls_supported = True
-            except (OSError, ssl.SSLError) as error:
-                logger.warning(
-                    f"IRC TLS handshake with {host}:{port} failed ({error}), "
-                    f"falling back to plaintext IRC on port {IRC_PORT}",
-                    extra={"emoji": ":warning:"},
-                )
-                _tls_supported = False
-        return _tls_supported
+        if _tls_supported is True:
+            return True
+        try:
+            context = _irc_tls_context()
+            with socket.create_connection((host, port), timeout=timeout) as sock:
+                with context.wrap_socket(sock, server_hostname=host):
+                    _tls_supported = True
+        except (OSError, ssl.SSLError) as error:
+            logger.warning(
+                f"IRC TLS handshake with {host}:{port} failed ({error})",
+                extra={"emoji": ":warning:"},
+            )
+            return False
+        return True
 
 
 class ChatPresence(Enum):
@@ -105,14 +117,27 @@ class ClientIRC(SingleServerIRCBot):
         self.settings = settings
         self.channel = "#" + channel
         self.__active = False
+        # die() can run before start() (from the thread that stops chat), so
+        # start() must not undo it.
+        self.__stopped = False
+        self.__lifecycle_lock = Lock()
 
         connect_params = {}
-        port = IRC_PORT
         if _irc_tls_available():
             port = IRC_TLS_PORT
             context = _irc_tls_context()
             connect_params["connect_factory"] = irc.connection.Factory(
                 wrapper=partial(context.wrap_socket, server_hostname=IRC)
+            )
+        elif _plaintext_irc_allowed():
+            port = IRC_PORT
+            logger.warning(
+                f"Using plaintext IRC on port {IRC_PORT} because {ALLOW_PLAINTEXT_IRC_ENV} is set; the chat OAuth token is sent unencrypted",
+                extra={"emoji": ":warning:"},
+            )
+        else:
+            raise IRCTLSUnavailable(
+                f"TLS to {IRC}:{IRC_TLS_PORT} is unavailable and {ALLOW_PLAINTEXT_IRC_ENV} is not set"
             )
 
         super(ClientIRC, self).__init__(
@@ -126,7 +151,10 @@ class ClientIRC(SingleServerIRCBot):
         client.join(self.channel)
 
     def start(self):
-        self.__active = True
+        with self.__lifecycle_lock:
+            if self.__stopped:
+                return
+            self.__active = True
         self._connect()
         while self.__active:
             try:
@@ -141,9 +169,14 @@ class ClientIRC(SingleServerIRCBot):
                     logger.error(
                         f"Exception raised: {e}. Thread is active: {self.__active}"
                     )
+        # die() may have run between the check above and _connect(), before
+        # there was a connection to close.
+        self.connection.disconnect()
 
     def die(self, msg="Bye, cruel world!"):
-        self.__active = False
+        with self.__lifecycle_lock:
+            self.__stopped = True
+            self.__active = False
         self.connection.disconnect(msg)
 
     """
@@ -234,7 +267,9 @@ class ThreadChat(Thread):
         return None
 
     def __init__(self, username, token, channel):
-        super(ThreadChat, self).__init__()
+        # A daemon thread, so a chat that is still connecting (or wasn't
+        # stopped) can't keep the process alive after the miner has stopped.
+        super(ThreadChat, self).__init__(daemon=True)
 
         self.username = username
         self.token = token
@@ -242,19 +277,37 @@ class ThreadChat(Thread):
 
         self.chat_irc = None
         self.settings = None
+        self._stop_lock = Lock()
+        self._stop_requested = False
 
     def run(self):
-        self.chat_irc = ClientIRC(
-            self.username, self.token, self.channel, settings=self.settings
-        )
+        try:
+            chat_irc = ClientIRC(
+                self.username, self.token, self.channel, settings=self.settings
+            )
+        except IRCTLSUnavailable:
+            logger.warning(
+                f"Not joining IRC chat {self.channel}: TLS to {IRC}:{IRC_TLS_PORT} is unavailable. Chat is retried the next time it is joined; set {ALLOW_PLAINTEXT_IRC_ENV}=1 to allow plaintext IRC.",
+                extra={"emoji": ":speech_balloon:"},
+            )
+            return
+        # stop() can arrive while ClientIRC was being created (the TLS probe
+        # takes a while) and chat_irc was still None, so it couldn't stop it.
+        with self._stop_lock:
+            if self._stop_requested:
+                return
+            self.chat_irc = chat_irc
         logger.info(
             f"Join IRC Chat: {self.channel}", extra={"emoji": ":speech_balloon:"}
         )
-        self.chat_irc.start()
+        chat_irc.start()
 
     def stop(self):
-        if self.chat_irc is not None:
+        with self._stop_lock:
+            self._stop_requested = True
+            chat_irc = self.chat_irc
+        if chat_irc is not None:
             logger.info(
                 f"Leave IRC Chat: {self.channel}", extra={"emoji": ":speech_balloon:"}
             )
-            self.chat_irc.die()
+            chat_irc.die()

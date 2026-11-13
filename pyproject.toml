@@ -6,3 +6,35 @@ required-version = "26"
 target-version = ["py311"]
 # Agent worktrees are full checkouts of the repo but are not in .gitignore.
 extend-exclude = '^/\.claude/'
+
+[tool.mypy]
+# An incremental type check (#282): only the modules listed in `files` are
+# checked, starting with the notifier contract (NotificationError.Notifier and
+# SendResult) and the configuration code. Add a module here once it passes;
+# don't widen this to the whole package in one go.
+python_version = "3.11"
+files = [
+    "TwitchChannelPointsMiner/classes/NotificationError.py",
+    "TwitchChannelPointsMiner/classes/Apprise.py",
+    "TwitchChannelPointsMiner/classes/Discord.py",
+    "TwitchChannelPointsMiner/classes/Email.py",
+    "TwitchChannelPointsMiner/classes/Gotify.py",
+    "TwitchChannelPointsMiner/classes/Matrix.py",
+    "TwitchChannelPointsMiner/classes/Ntfy.py",
+    "TwitchChannelPointsMiner/classes/Pushover.py",
+    "TwitchChannelPointsMiner/classes/Telegram.py",
+    "TwitchChannelPointsMiner/classes/Webhook.py",
+    "TwitchChannelPointsMiner/classes/Settings.py",
+    "TwitchChannelPointsMiner/config_editor.py",
+    "TwitchChannelPointsMiner/config_migration.py",
+    "TwitchChannelPointsMiner/runner.py",
+]
+# Modules outside `files` are read for their types but not reported on.
+follow_imports = "silent"
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+# Optional or untyped third-party packages.
+[[tool.mypy.overrides]]
+module = ["apprise", "apprise.*", "colorama", "dateutil", "dateutil.*", "irc", "irc.*", "pytz", "validators", "emoji", "pushbullet", "webview", "pystray", "PIL", "PIL.*"]
+ignore_missing_imports = true

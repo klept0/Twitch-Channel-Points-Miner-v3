@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from TwitchChannelPointsMiner.classes.DropAnalytics import DropAnalytics
 from TwitchChannelPointsMiner.classes.DropInventory import DropInventory
 from TwitchChannelPointsMiner.classes.entities.Campaign import Campaign
 from TwitchChannelPointsMiner.classes.gql.Errors import RetryError
@@ -63,9 +64,7 @@ def bare_twitch(monkeypatch, claim_status="ELIGIBLE_FOR_ALL"):
             status=claim_status, errors=[]
         )
     )
-    monkeypatch.setattr(
-        Twitch, "_Twitch__drop_variant_entries_from_drop", lambda self, drop: []
-    )
+    monkeypatch.setattr(DropAnalytics, "variant_entries", lambda self, drop: [])
     return twitch
 
 
@@ -921,9 +920,7 @@ def test_channel_verdicts_store_only_fresh_negative_results(monkeypatch):
 def test_accepted_claim_stops_applying_inventory_progress(monkeypatch):
     twitch = bare_twitch(monkeypatch)
     twitch.drop_inventory_minutes_by_drop_id = {"drop-1": 9, "drop-2": 5}
-    monkeypatch.setattr(
-        Twitch, "_Twitch__save_drop_claim_analytics", lambda *args, **kwargs: None
-    )
+    monkeypatch.setattr(DropAnalytics, "save_drop", lambda *args, **kwargs: None)
     drop = SimpleNamespace(id="drop-1", drop_instance_id="instance-1")
 
     assert twitch.claim_drop(drop) is True
@@ -958,13 +955,13 @@ def claim_recording_twitch(monkeypatch, statuses=("ELIGIBLE_FOR_ALL",)):
 
     twitch.gql = SimpleNamespace(claim_drop_rewards=claim_drop_rewards)
     monkeypatch.setattr(
-        Twitch,
-        "_Twitch__save_drop_claim_analytics",
+        DropAnalytics,
+        "save_drop",
         lambda *args, **kwargs: saved.append(args),
     )
     monkeypatch.setattr(
-        Twitch,
-        "_Twitch__drop_variant_entries_from_drop",
+        DropAnalytics,
+        "variant_entries",
         lambda self, drop: [{"name": "Reward"}],
     )
     twitch_module = importlib.import_module("TwitchChannelPointsMiner.classes.Twitch")
@@ -1995,9 +1992,7 @@ def test_accepted_drop_stays_finished_across_inventory_syncs(monkeypatch):
     twitch.gql.claim_drop_rewards = lambda drop_instance_id: SimpleNamespace(
         status="ELIGIBLE_FOR_ALL", errors=[]
     )
-    monkeypatch.setattr(
-        Twitch, "_Twitch__save_drop_claim_analytics", lambda *args, **kwargs: None
-    )
+    monkeypatch.setattr(DropAnalytics, "save_drop", lambda *args, **kwargs: None)
     assert twitch.claim_drop(drop) is True
     twitch.accepted_drop_claims = {}
     twitch._Twitch__cache_drop_inventory_progress(_daily_drop_inventory(campaign, 170))

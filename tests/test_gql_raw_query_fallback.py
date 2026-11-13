@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 import requests
 
+from TwitchChannelPointsMiner.classes.DropAnalytics import DropAnalytics
 from TwitchChannelPointsMiner.classes.ClientSession import ClientSession
 from TwitchChannelPointsMiner.classes.gql.Errors import (
     RetryError,
@@ -267,9 +268,7 @@ def test_claim_fallback_preserves_unlinked_account_guard(monkeypatch):
     twitch = object.__new__(Twitch)
     twitch.gql = GQL(client_session(), post_request=post)
     twitch.log_drop_checks = False
-    monkeypatch.setattr(
-        Twitch, "_Twitch__drop_variant_entries_from_drop", lambda *args: []
-    )
+    monkeypatch.setattr(DropAnalytics, "variant_entries", lambda *args: [])
     drop = SimpleNamespace(id="drop-1", name="Reward", drop_instance_id="instance-1")
     link = {
         "campaign_id": "campaign-1",
