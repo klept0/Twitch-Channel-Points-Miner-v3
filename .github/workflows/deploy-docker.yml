@@ -83,14 +83,32 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_TOKEN }}
 
+      # Only the repository's current latest release moves the latest image
+      # tag, so publishing an older tag by hand can't move it backwards.
+      - name: Check whether this is the latest release
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.ref }}
+        shell: bash
+        run: |
+          latest_tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName || true)"
+          if [[ "${latest_tag}" == "${RELEASE_TAG}" ]]; then
+            echo "is_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_latest=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${RELEASE_TAG} is not the latest release (${latest_tag:-none}); the latest image tag is left unchanged."
+          fi
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ steps.names.outputs.images }}
+          flavor: latest=false
           tags: |
             type=semver,pattern={{version}},value=${{ inputs.ref }}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ steps.latest.outputs.is_latest }}
 
       - name: Build and push AMD64 and ARM64
         id: docker_build
