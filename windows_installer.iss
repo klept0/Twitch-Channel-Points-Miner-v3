@@ -6,6 +6,43 @@
   #define MyAppVersion "0.0.0"
 #endif
 
+; One script builds three installers (see docs/windows.md):
+;   desktop    - the desktop app, bundled (the default).
+;   background - the headless background-mining build, bundled.
+;   online     - asks which of the two to install and downloads only that
+;                program from the release, checking its SHA-256.
+#ifndef Payload
+  #define Payload "desktop"
+#endif
+#if Payload != "desktop" && Payload != "background" && Payload != "online"
+  #error Payload must be desktop, background or online
+#endif
+#if Payload == "online"
+  #ifndef DesktopSha256
+    #error The online installer needs /DDesktopSha256=<hash of the desktop exe>
+  #endif
+  #ifndef BackgroundSha256
+    #error The online installer needs /DBackgroundSha256=<hash of the background exe>
+  #endif
+  #ifndef ReleaseRepo
+    #define ReleaseRepo "klept0/Twitch-Channel-Points-Miner-v3"
+  #endif
+  #ifndef ReleaseTag
+    #define ReleaseTag MyAppVersion
+  #endif
+  ; Release assets uploaded by release-please.yml next to the installers.
+  #define PayloadBaseUrl "https://github.com/" + ReleaseRepo + "/releases/download/" + ReleaseTag + "/TwitchChannelPointsMiner-" + MyAppVersion
+  #define DesktopUrl PayloadBaseUrl + "-Desktop.exe"
+  #define BackgroundUrl PayloadBaseUrl + "-Background.exe"
+#endif
+#if Payload == "desktop"
+  #define OutputSuffix "-Setup"
+#elif Payload == "background"
+  #define OutputSuffix "-Background-Setup"
+#else
+  #define OutputSuffix "-Online-Setup"
+#endif
+
 [Setup]
 AppId={{8D7522D0-35E5-45A8-8F5E-E46049123B3F}}
 AppName={#MyAppName}
@@ -16,7 +53,7 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=dist
-OutputBaseFilename=TwitchChannelPointsMiner-{#MyAppVersion}-Setup
+OutputBaseFilename=TwitchChannelPointsMiner-{#MyAppVersion}{#OutputSuffix}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -31,18 +68,34 @@ RestartApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
-Name: "startuponlogin"; Description: "Start automatically when you sign in"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
-; Background mode runs the miner with no window, started at sign-in by a
-; per-user scheduled task (or a Run entry when the task can't be created),
-; and restarts it after a crash. See windows_launcher.py's --background and
-; docs/windows.md. It replaces the sign-in shortcut above when both are chosen.
-Name: "backgroundmode"; Description: "Run in the background when you sign in (no window, restarts after a crash; replaces the option above)"; GroupDescription: "Background mode:"; Flags: unchecked
+; Tasks marked "Check: not BackgroundPayload" are for the desktop app only;
+; the background build always runs background mining.
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked; Check: not BackgroundPayload
+Name: "startuponlogin"; Description: "Start automatically when you sign in"; GroupDescription: "Additional shortcuts:"; Flags: unchecked; Check: not BackgroundPayload
+; Background mode runs the miner with no window, started by a scheduled task
+; (or a Run entry when the task can't be created), and restarts it after a
+; crash. See windows_launcher.py's --background and docs/windows.md. It
+; replaces the sign-in shortcut above when both are chosen.
+Name: "backgroundmode"; Description: "Run in the background when you sign in (no window, restarts after a crash; replaces the option above)"; GroupDescription: "Background mode:"; Flags: unchecked; Check: not BackgroundPayload
+; Starting at boot runs the task whether or not anyone is signed in, as your
+; account without storing your password (S4U). Registering it needs one
+; administrator (UAC) prompt; if that is declined it starts at sign-in.
+Name: "backgroundmode\atboot"; Description: "Also start when Windows starts, before anyone signs in (asks for administrator permission once)"; Flags: unchecked; Check: not BackgroundPayload
+Name: "atboot"; Description: "Start when Windows starts, before anyone signs in (asks for administrator permission once; otherwise it starts when you sign in)"; GroupDescription: "Background mining:"; Flags: unchecked; Check: BackgroundPayload
 Name: "configure"; Description: "Prefill a new configuration"; GroupDescription: "First run:"; Flags: checkedonce
 Name: "enableanalytics"; Description: "Enable the analytics dashboard (recommended)"; GroupDescription: "First run:"; Flags: checkedonce
 
 [Files]
+; Every payload installs as {#MyAppExeName}, so shortcuts, the scheduled
+; task and upgrades between the installers all use the same path.
+#if Payload == "desktop"
 Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+#elif Payload == "background"
+Source: "dist\TwitchChannelPointsMiner-Background.exe"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
+#else
+; Downloaded and hash-checked by NextButtonClick before installing starts.
+Source: "{tmp}\{#MyAppExeName}"; DestDir: "{app}"; Flags: external ignoreversion
+#endif
 ; This build of the exe is the "standard" flavor (see build_windows.bat and
 ; windows_launcher.py's _is_standard_build()) - it keeps configuration,
 ; cookies, analytics, and logs in the per-user AppData location below, kept
@@ -53,16 +106,26 @@ Source: "config.example.py"; DestDir: "{localappdata}\TwitchChannelPointsMiner\c
 [InstallDelete]
 ; Inno Setup doesn't remove a shortcut when its task is deselected, so drop
 ; the sign-in shortcut an earlier install made once background mode replaces it.
-Type: files; Name: "{userstartup}\{#MyAppName}.lnk"; Tasks: backgroundmode
+Type: files; Name: "{userstartup}\{#MyAppName}.lnk"; Check: UseBackgroundMode
+
+[Dirs]
+; So the "Background mining logs" shortcut opens before the first run.
+Name: "{localappdata}\TwitchChannelPointsMiner\logs"; Flags: uninsneveruninstall; Check: UseBackgroundMode
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Check: not BackgroundPayload
+; The background build's username and Twitch sign-in, in a console window.
+Name: "{group}\Set up background mining"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--setup"; WorkingDir: "{app}"; Check: BackgroundPayload
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 ; Launches straight to the tray (--start-minimized) rather than popping the
 ; window on every sign-in - see windows_launcher.py's _START_MINIMIZED_FLAG.
 Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--start-minimized"; WorkingDir: "{app}"; Tasks: startuponlogin and not backgroundmode
-Name: "{group}\Start background mining"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; WorkingDir: "{app}"; Tasks: backgroundmode
-Name: "{group}\Stop background mining"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--stop-background"; WorkingDir: "{app}"; Tasks: backgroundmode
+; --start-background runs the scheduled task, so a boot task's miner keeps
+; running after sign-out, and asks for the sign-in first when it's missing.
+Name: "{group}\Start background mining"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--start-background"; WorkingDir: "{app}"; Check: UseBackgroundMode
+Name: "{group}\Stop background mining"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--stop-background"; WorkingDir: "{app}"; Check: UseBackgroundMode
+Name: "{group}\Background mining status"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--background-status"; WorkingDir: "{app}"; Check: UseBackgroundMode
+Name: "{group}\Background mining logs"; Filename: "{localappdata}\TwitchChannelPointsMiner\logs"; Check: UseBackgroundMode
 
 [Registry]
 ; The in-app Settings tab registers start-on-login under this HKCU Run value
@@ -74,14 +137,16 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 [Run]
 ; Register background mode, or remove a registration left by an earlier
 ; install when the task is no longer selected.
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--register-background"; WorkingDir: "{app}"; StatusMsg: "Setting up background mode..."; Flags: runhidden waituntilterminated; Tasks: backgroundmode
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--unregister-background"; WorkingDir: "{app}"; StatusMsg: "Removing background mode..."; Flags: runhidden waituntilterminated; Tasks: not backgroundmode; Check: BackgroundModeRegistered
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent; Tasks: not backgroundmode
-; Background mode can't show Twitch's activation code, so the first sign-in
-; happens in the desktop app. The background exe exits without mining until
-; a username and a Twitch login exist.
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; Description: "Start background mining now"; WorkingDir: "{app}"; Flags: nowait postinstall runhidden; Tasks: backgroundmode
-Filename: "{app}\{#MyAppExeName}"; Description: "Open the desktop app to sign in to Twitch (needed once before background mining can run)"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent unchecked; Tasks: backgroundmode
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--register-background"; WorkingDir: "{app}"; StatusMsg: "Setting up background mode..."; Flags: runhidden waituntilterminated; Check: UseBackgroundMode and not StartAtBoot
+; Shows one UAC prompt for the boot task (see windows_launcher.py's
+; register_background_task); declining it registers the sign-in task.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--register-background --at-boot"; WorkingDir: "{app}"; StatusMsg: "Setting up background mode (administrator permission is needed to start at boot)..."; Flags: runhidden waituntilterminated; Check: UseBackgroundMode and StartAtBoot
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--unregister-background"; WorkingDir: "{app}"; StatusMsg: "Removing background mode..."; Flags: runhidden waituntilterminated; Check: (not UseBackgroundMode) and BackgroundModeRegistered
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent; Check: not UseBackgroundMode
+; Background mining can't show Twitch's activation code, so until a username
+; and a Twitch login exist this opens the sign-in instead: the desktop
+; window, or the background build's setup console.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--start-background"; Description: "Start background mining now (asks you to sign in to Twitch first if needed)"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent; Check: UseBackgroundMode
 Filename: "https://github.com/klept0/Twitch-Channel-Points-Miner-v3/blob/master/docs/configuration.md"; Description: "Open the configuration guide"; Flags: shellexec postinstall skipifsilent unchecked
 
 [UninstallRun]
@@ -99,6 +164,38 @@ const
 var
   ConfigurePage: TInputQueryWizardPage;
   LegacyConfigNoticeShown: Boolean;
+#if Payload == "online"
+  ModePage: TInputOptionWizardPage;
+  DownloadPage: TDownloadWizardPage;
+#endif
+
+// True when the program being installed is the headless background build.
+function BackgroundPayload(): Boolean;
+begin
+#if Payload == "background"
+  Result := True;
+#elif Payload == "online"
+  // ModePage exists once InitializeWizard has run.
+  Result := (ModePage <> nil) and (ModePage.SelectedValueIndex = 1);
+#else
+  Result := False;
+#endif
+end;
+
+// Background mining is set up: always for the background build, and for the
+// desktop app when its "backgroundmode" task is chosen.
+function UseBackgroundMode(): Boolean;
+begin
+  Result := BackgroundPayload() or WizardIsTaskSelected('backgroundmode');
+end;
+
+function StartAtBoot(): Boolean;
+begin
+  if BackgroundPayload() then
+    Result := WizardIsTaskSelected('atboot')
+  else
+    Result := WizardIsTaskSelected('backgroundmode\atboot');
+end;
 
 // True when a real config.py from a previous install already sits beside
 // the exe (e.g. a portable build's data folder, or an earlier "standard"
@@ -295,8 +392,71 @@ begin
       ewWaitUntilTerminated, ResultCode);
 end;
 
+#if Payload == "online"
+procedure RegisterPreviousData(PreviousDataKey: Integer);
+begin
+  if BackgroundPayload() then
+    SetPreviousData(PreviousDataKey, 'Payload', 'background')
+  else
+    SetPreviousData(PreviousDataKey, 'Payload', 'desktop');
+end;
+#endif
+
+// The online installer downloads the chosen program once the user confirms
+// on the Ready page. Download raises when the file's SHA-256 doesn't match
+// the hash compiled in, so a tampered or wrong file is never installed.
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+#if Payload == "online"
+  if CurPageID = wpReady then
+  begin
+    DownloadPage.Clear;
+    if BackgroundPayload() then
+      DownloadPage.Add('{#BackgroundUrl}', '{#MyAppExeName}', '{#BackgroundSha256}')
+    else
+      DownloadPage.Add('{#DesktopUrl}', '{#MyAppExeName}', '{#DesktopSha256}');
+    DownloadPage.Show;
+    try
+      try
+        DownloadPage.Download;
+      except
+        if DownloadPage.AbortedByUser then
+          Log('Download cancelled by the user.')
+        else
+          SuppressibleMsgBox('The download failed, so nothing was installed.' + #13#10#13#10 +
+            AddPeriod(GetExceptionMessage) + #13#10#13#10 +
+            'Check the internet connection and try again, or use the full ' +
+            'installer from the release page.', mbCriticalError, MB_OK, IDOK);
+        Result := False;
+      end;
+    finally
+      DownloadPage.Hide;
+    end;
+  end;
+#endif
+end;
+
 procedure InitializeWizard;
 begin
+#if Payload == "online"
+  ModePage := CreateInputOptionPage(wpWelcome,
+    'Choose what to install',
+    'Setup downloads only the program you choose.',
+    'Both keep their settings, Twitch sign-in, analytics and logs in the ' +
+    'same place, so you can switch later by running this installer again.',
+    True, False);
+  ModePage.Add('Desktop app: a window with the dashboard and a tray icon. ' +
+    'It can also mine in the background.');
+  ModePage.Add('Background mining only: a smaller program with no window ' +
+    'that mines from a scheduled task and restarts after a crash.');
+  if GetPreviousData('Payload', 'desktop') = 'background' then
+    ModePage.SelectedValueIndex := 1
+  else
+    ModePage.SelectedValueIndex := 0;
+  DownloadPage := CreateDownloadPage(SetupMessage(msgWizardPreparing),
+    SetupMessage(msgPreparingDesc), nil);
+#endif
   // No Randomize/RandSeed call needed (and neither exists in Pascal
   // Script): Inno Setup's built-in Random() is backed by its own
   // cryptographically strong RNG (TStrongRandom), not the Delphi RTL's

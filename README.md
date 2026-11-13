@@ -184,6 +184,9 @@ cookies, analytics, and logs are stored - the installer keeps them in your
 Windows user profile, separate from the program itself, while the portable
 build keeps everything beside the executable so the whole thing can be moved
 or run from removable media. See [Windows](docs/windows.md#windows) for the full comparison.
+Each release also has an online installer that downloads only the program you
+choose, and an installer for background mining only; see
+[Installers](docs/windows.md#installers).
 
 1. Download `TwitchChannelPointsMiner-<version>-Setup.exe` from the official
    [Releases page](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/releases)
