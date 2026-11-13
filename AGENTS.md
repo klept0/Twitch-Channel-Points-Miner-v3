@@ -9,6 +9,14 @@ This repository is a Python Twitch channel points miner. Keep changes focused, p
 - Project overview and setup notes: [README.md](README.md)
 - Contribution and style expectations: [CONTRIBUTING.md](CONTRIBUTING.md)
 
+## Subsystem guidance
+
+Read the scoped guide before working in these folders. Each folder's `CLAUDE.md` imports its `AGENTS.md`, so both point to the same text.
+
+- [TwitchChannelPointsMiner/AGENTS.md](TwitchChannelPointsMiner/AGENTS.md): threads and shared state, editing `config.py`, dashboard authentication, secrets.
+- [tests/AGENTS.md](tests/AGENTS.md): offline test conventions and Windows-only tests.
+- [.github/AGENTS.md](.github/AGENTS.md): workflows, release scripts and their tests.
+
 ## Working conventions
 
 - Preserve `__slots__` usage and existing enum-based settings patterns when touching classes.
@@ -36,6 +44,7 @@ This repository is a Python Twitch channel points miner. Keep changes focused, p
 - Keep any metadata for an additional entry indented directly below that entry, including `BREAKING-CHANGE: ...`, and do not place unrelated text after the additional entries.
 - Before merging the Release Please PR, review its generated changelog and release notes for user-facing completeness and expand the summary when a single entry contains several notable changes.
 - Do not enable auto-merge on the Release Please PR because merging it is the action that publishes the combined release.
+- If a Release Please run created the release but failed before publishing, re-running it publishes nothing because it sees no new release. Run the Release Please workflow manually with `release_tag` set to that tag instead; it publishes the Docker image and Windows files and closes the released issues.
 
 ### Fork versioning
 
@@ -59,6 +68,7 @@ This repository is a Python Twitch channel points miner. Keep changes focused, p
 - Install dependencies with `pip install -r requirements.txt`.
 - Run the automated test suite with `python -m pytest`; prefer focused tests for the files or behavior you change.
 - The project follows Black formatting with the version pinned in `requirements-dev.txt` (see `pyproject.toml`); check with `black --check .` and format only the files you change.
+- Run `python -m mypy` to type-check the modules listed under `[tool.mypy]` in `pyproject.toml`. Add a module to that list once it passes; notifiers' `send()` returns `SendResult` from `classes/NotificationError.py`.
 
 ## Pull request reviews
 
