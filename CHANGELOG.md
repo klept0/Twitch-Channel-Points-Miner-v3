@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.20.0-post.10](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.9...3.20.0-post.10) (2026-11-14)
+
+
+### Bug Fixes
+
+* **drops:** remove the reward campaign query Twitch rejected on every sync ([#74](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/74)) ([15f7e98](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/15f7e988c624157863716186dffb6b8849630981))
+
 ## [3.20.0-post.9](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.8...3.20.0-post.9) (2026-11-13)
 
 
