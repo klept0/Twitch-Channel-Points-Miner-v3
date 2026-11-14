@@ -1322,3 +1322,30 @@ def test_log_endpoint_reports_disabled_file_logging():
     assert response.status_code == 404
     assert response.headers["X-Log-Unavailable"] == "disabled"
     assert "File logging is disabled" in response.get_data(as_text=True)
+
+
+def test_miner_passes_its_log_file_to_the_dashboard(monkeypatch):
+    from TwitchChannelPointsMiner.TwitchChannelPointsMiner import (
+        TwitchChannelPointsMiner,
+    )
+    from TwitchChannelPointsMiner.classes import AnalyticsServer as server_module
+    from TwitchChannelPointsMiner.classes.Settings import Settings
+
+    created = []
+
+    class FakeServer:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(server_module, "AnalyticsServer", FakeServer)
+    monkeypatch.setattr(Settings, "enable_analytics", True, raising=False)
+    miner = object.__new__(TwitchChannelPointsMiner)
+    miner.username = "someone"
+    miner.logs_file = "/logs/someone.20260101-120000.log"
+
+    miner.analytics()
+
+    assert created[0]["logs_file"] == "/logs/someone.20260101-120000.log"

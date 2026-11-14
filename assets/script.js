@@ -157,6 +157,8 @@ var logTailBuffer = createTailBuffer(LOG_DISPLAY_MAX_CHARS);
 // in the background (like the Drops/Now Watching refreshes) until paused.
 function getLog() {
     $.get(`/log?lastIndex=${lastReceivedLogIndex}&tailBytes=${initialLogTailBytes}`).done(function (data, _status, xhr) {
+        // A log file is available (again), so keep polling.
+        logFileDisabled = false;
         if (!logPlaceholderCleared) {
             logTailBuffer = createTailBuffer(LOG_DISPLAY_MAX_CHARS);
             logPlaceholderCleared = true;
@@ -265,6 +267,9 @@ $(document).ready(function () {
         $('#auto-update-log').text(autoUpdateLog ? '⏸️' : '▶️');
 
         if (autoUpdateLog) {
+            // Resuming retries even after the server said logging is
+            // disabled, in case the miner was restarted with it enabled.
+            logFileDisabled = false;
             getLog();
         }
     });
