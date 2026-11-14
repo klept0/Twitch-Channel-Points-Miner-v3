@@ -160,7 +160,13 @@ function getLog() {
     if (logRequest !== null) return;
     clearTimeout(logPollTimer);
     logPollTimer = null;
-    logRequest = $.get(`/log?lastIndex=${lastReceivedLogIndex}&tailBytes=${initialLogTailBytes}`).done(function (data, _status, xhr) {
+    logRequest = $.ajax({
+        url: `/log?lastIndex=${lastReceivedLogIndex}&tailBytes=${initialLogTailBytes}`,
+        // Only one request runs at a time, so one that never settles (a
+        // suspended PC, a proxy dropping the connection) must time out
+        // instead of stopping polling for good.
+        timeout: Math.max(30000, 3 * logPollInterval),
+    }).done(function (data, _status, xhr) {
         if (!logPlaceholderCleared) {
             logTailBuffer = createTailBuffer(LOG_DISPLAY_MAX_CHARS);
             logPlaceholderCleared = true;
@@ -182,7 +188,10 @@ function getLog() {
             // There is no log file to tail: show why and pause, so the
             // button offers resume instead of claiming to poll.
             $("#log-content").text(xhr.responseText);
-            logPlaceholderCleared = true;
+            // The message replaced the pane, so a later resume loads a fresh
+            // tail instead of appending to the old one.
+            logPlaceholderCleared = false;
+            lastReceivedLogIndex = 0;
             autoUpdateLog = false;
             $('#auto-update-log').text('▶️');
         }
