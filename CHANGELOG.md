@@ -1,5 +1,49 @@
 # Changelog
 
+## [3.20.0-post.9](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.8...3.20.0-post.9) (2026-11-13)
+
+
+### Features
+
+* **notifications:** customise Discord messages with embeds, colours, title and bot identity ([#65](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/65)) ([b78502f](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/b78502ff8f77d5f3108033970aa82f984cb60a74))
+* **supervisor:** restart the supervisor when an update changes it ([#38](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/38)) ([cd4a271](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/cd4a271d64151569199e9973d7afc526808c4467))
+* **windows:** add a background mode that mines at sign-in with crash recovery ([#64](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/64)) ([675c07d](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/675c07d13b9b726967217ef584db60e15efcb666))
+* **windows:** add a background-only build, start at boot, and online and background installers ([#72](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/72)) ([d8929e4](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/d8929e4b982b63610867a13cc593056f686b5d24))
+
+
+### Bug Fixes
+
+* **analytics:** add Subresource Integrity hashes to the dashboard's CDN scripts and stylesheets ([547e494](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/547e49405954cdebb7986e0f7721dc929746ae36))
+* **analytics:** blame another program only when the dashboard port is actually in use ([547e494](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/547e49405954cdebb7986e0f7721dc929746ae36))
+* **analytics:** escape series names and reasons in the chart tooltip ([547e494](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/547e49405954cdebb7986e0f7721dc929746ae36))
+* **analytics:** harden the dashboard against DNS rebinding, cross-site requests and path traversal ([#47](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/47)) ([547e494](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/547e49405954cdebb7986e0f7721dc929746ae36))
+* **analytics:** show the logger's actual log file in the dashboard Logs tab ([#51](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/51)) ([687e91d](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/687e91d6fdcc45841afc4de1485f17049d1b268f))
+* **bet:** stop stealth mode from computing a negative bet ([#40](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/40)) ([2670be0](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/2670be0a54982726b4407be87462a8a3cd093c56))
+* **chat:** never send the IRC token over plaintext unless TCPM_ALLOW_PLAINTEXT_IRC is set ([#46](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/46)) ([b3d0fd3](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/b3d0fd381125c933e8d93164ad09e7e4b70070af))
+* **config:** edit STREAMERS in place so dashboard changes keep comments and settings ([#50](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/50)) ([b4ec298](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/b4ec2984a53d0e018d4843f5fcbf73373ae24c00))
+* **config:** keep emoji logging off on Windows when migrating LoggerSettings ([#53](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/53)) ([bf6ccd9](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/bf6ccd90fd5b688671f8a35317ecfb42ec8bdbb6))
+* **config:** remove a UTF-8 BOM without touching migration backups ([#57](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/57)) ([8610984](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/86109842094eb9588c2c98239ecb8f1e4bb99102))
+* **config:** require every constructor argument when enabling a notifier from the dashboard ([#49](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/49)) ([3fc3588](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/3fc3588c2f6c05bb77246a50fd46735d60c66ec9))
+* **config:** use byte columns and real line breaks when migrating config.py ([#56](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/56)) ([b14b4ba](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/b14b4ba06e3844e695dff0e0c206d9d4ff70e029))
+* **docker:** move the latest image tag only for the current latest release ([#43](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/43)) ([43c138d](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/43c138dfb595413f3cf567155c09cbb84a3a61c2))
+* **drops:** mine a completed campaign again when Twitch adds a drop to it ([#60](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/60)) ([eb92e37](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/eb92e37deadb4599b223688e8586297c9df8f95c))
+* **drops:** stop repeating the dashboard error when Twitch withholds campaigns from the Android login ([#59](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/59)) ([e153fa2](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/e153fa2bc45ee3d62f613619d7e42c2db09df739))
+* **lifecycle:** stop workers when the miner stops, close stale websockets and reconnect off the main loop ([#54](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/54)) ([c14d8d8](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/c14d8d8182727ecc9b751d6fa5d02503973ea2d3))
+* **login:** treat a malformed Android login URL or validation reply as an invalid login ([#58](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/58)) ([38cd9b8](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/38cd9b88b3e00e9f8fdf7e3ae3f36b6212c71a5a))
+* **matrix:** log in on the first notification so a failed login is reported and retried ([#52](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/52)) ([7615521](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/7615521b9900c9a90b393dc2f02ad435a895ba33))
+* port zarmstrong's review fixes for Drop events, raw queries and the supervisor ([#37](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/37)) ([534dea8](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/534dea8c4a6656621fcc79e65264e687ec6a4580))
+* **release:** keep release notes intact and allow publishing an existing release again ([#61](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/61)) ([07fcfea](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/07fcfea01325db74a434e35092cb018b1c61cbfb))
+* **runner:** reject invalid TCPM_CONFIG_RELOAD_SECONDS values before startup ([#41](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/41)) ([5a10cf8](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/5a10cf88b2b9ebb05ba9bcf378b48cb2d74e9353))
+* **utils:** probe several hosts without changing the global socket timeout ([#42](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/42)) ([f98993f](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/f98993f9d6b7983abd2b2e15aa5801193fe25a6e))
+* **watch:** warn once per streamer while its spade URL is missing ([#44](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/44)) ([b14de04](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/b14de0464ce03d31d7de6bea33b9b702dd2bdef0))
+* **windows:** prevent a second miner start and reconcile the two autostart methods ([#55](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/55)) ([aa644d0](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/aa644d091a68905f3a9261159c281144b4e06f94))
+
+
+### Documentation
+
+* **agents:** add CLAUDE.md and scoped agent guidance for the package, tests and workflows ([#66](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/66)) ([6013baa](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/6013baa78c0b4f71c7233b7344c37b11ce8f87a8))
+* **readme:** adopt the upstream docs layout proposed in zarmstrong[#291](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/291) ([#35](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/35)) ([fe9412f](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/fe9412f90791b7ea91e02124251fd029e9df44b4))
+
 ## [3.20.0-post.8](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.7...3.20.0-post.8) (2026-11-12)
 
 
