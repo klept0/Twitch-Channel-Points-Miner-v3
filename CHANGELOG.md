@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.21.0-post.2](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.21.0-post.1...3.21.0-post.2) (2026-11-15)
+
+
+### Documentation
+
+* **changelog:** link upstream PRs and drop the reverted [#74](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/74) entry in 3.21.0-post.1 ([#76](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/76)) ([e1528f5](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/e1528f589324c3813e1443ab90a6832df344fe7d))
+* **readme:** remove "What this fork adds" now that upstream ships all three features ([#78](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/78)) ([c9cce27](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/c9cce27ef2cb7051ffb4fdb5d38d0cb5109ff62e))
+
 ## [3.21.0-post.1](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.20.0-post.9...3.21.0-post.1) (2026-11-15)
 
 
