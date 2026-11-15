@@ -144,9 +144,10 @@ var initialLogTailBytes = 128 * 1024;
 // the first real response arrives - cleared on that first response instead
 // of staying glued above the real tail forever.
 var logPlaceholderCleared = false;
-// Set when the server reports file logging is disabled (no log file to tail),
-// so polling stops instead of retrying a 404 forever.
-var logFileDisabled = false;
+// The log request in flight and the timer for the next poll, so pausing and
+// resuming can't start a second polling loop alongside the first.
+var logRequest = null;
+var logPollTimer = null;
 // See assets/tail_buffer.js for why this is bounded rather than an
 // ever-growing string.
 var LOG_DISPLAY_MAX_CHARS = 1024 * 1024;
@@ -156,7 +157,16 @@ var logTailBuffer = createTailBuffer(LOG_DISPLAY_MAX_CHARS);
 // Lazily started the first time the Logs tab is opened, then keeps polling
 // in the background (like the Drops/Now Watching refreshes) until paused.
 function getLog() {
-    $.get(`/log?lastIndex=${lastReceivedLogIndex}&tailBytes=${initialLogTailBytes}`).done(function (data, _status, xhr) {
+    if (logRequest !== null) return;
+    clearTimeout(logPollTimer);
+    logPollTimer = null;
+    logRequest = $.ajax({
+        url: `/log?lastIndex=${lastReceivedLogIndex}&tailBytes=${initialLogTailBytes}`,
+        // Only one request runs at a time, so one that never settles (a
+        // suspended PC, a proxy dropping the connection) must time out
+        // instead of stopping polling for good.
+        timeout: Math.max(30000, 3 * logPollInterval),
+    }).done(function (data, _status, xhr) {
         if (!logPlaceholderCleared) {
             logTailBuffer = createTailBuffer(LOG_DISPLAY_MAX_CHARS);
             logPlaceholderCleared = true;
@@ -175,15 +185,22 @@ function getLog() {
         }
     }).fail(function (xhr) {
         if (xhr.status === 404 && xhr.getResponseHeader("X-Log-Unavailable") === "disabled") {
+            // There is no log file to tail: show why and pause, so the
+            // button offers resume instead of claiming to poll.
             $("#log-content").text(xhr.responseText);
-            logPlaceholderCleared = true;
-            logFileDisabled = true;
+            // The message replaced the pane, so a later resume loads a fresh
+            // tail instead of appending to the old one.
+            logPlaceholderCleared = false;
+            lastReceivedLogIndex = 0;
+            autoUpdateLog = false;
+            $('#auto-update-log').text('▶️');
         }
     }).always(function () {
+        logRequest = null;
         // A rollover can briefly replace the active log between polls.
         // Retry transient failures without advancing the byte position.
-        if (autoUpdateLog && !logFileDisabled) {
-            setTimeout(getLog, logPollInterval);
+        if (autoUpdateLog) {
+            logPollTimer = setTimeout(getLog, logPollInterval);
         }
     });
 }
@@ -265,7 +282,11 @@ $(document).ready(function () {
         $('#auto-update-log').text(autoUpdateLog ? '⏸️' : '▶️');
 
         if (autoUpdateLog) {
+            // A request still in flight carries on polling by itself.
             getLog();
+        } else {
+            clearTimeout(logPollTimer);
+            logPollTimer = null;
         }
     });
 

@@ -1015,18 +1015,62 @@ def _autostart_command():
     return f'"{sys.executable}" {_START_MINIMIZED_FLAG}'
 
 
+# FOLDERID_Startup: the per-user Startup folder, the installer's {userstartup}.
+_FOLDERID_STARTUP = "{B97D20BB-F46A-4C97-BA10-5E3608430854}"
+_STARTUP_SHORTCUT_NAME = "Twitch Channel Points Miner.lnk"
+
+
+def _known_startup_folder():
+    """The per-user Startup folder as Windows resolves it, folder
+    redirection included, or None off Windows or if the lookup fails."""
+    if os.name != "nt":
+        return None
+    try:
+        import uuid
+        from ctypes import wintypes
+
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", wintypes.DWORD),
+                ("Data2", wintypes.WORD),
+                ("Data3", wintypes.WORD),
+                ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        folder_id = uuid.UUID(_FOLDERID_STARTUP)
+        guid = GUID(
+            folder_id.fields[0],
+            folder_id.fields[1],
+            folder_id.fields[2],
+            (ctypes.c_ubyte * 8)(*folder_id.bytes[8:]),
+        )
+        path = ctypes.c_wchar_p()
+        result = ctypes.windll.shell32.SHGetKnownFolderPath(
+            ctypes.byref(guid), 0, None, ctypes.byref(path)
+        )
+        try:
+            if result != 0 or not path.value:
+                return None
+            return Path(path.value)
+        finally:
+            # The buffer must be freed even when the call fails.
+            ctypes.windll.ole32.CoTaskMemFree(path)
+    except Exception:
+        return None
+
+
 def _startup_shortcut_path():
     """The Startup-folder shortcut the installer's "start on login" task
-    creates (see windows_installer.iss). Returns None when APPDATA is
-    unset."""
-    appdata = os.environ.get("APPDATA")
-    if not appdata:
-        return None
-    return (
-        Path(appdata)
-        / "Microsoft/Windows/Start Menu/Programs/Startup"
-        / "Twitch Channel Points Miner.lnk"
-    )
+    creates (see windows_installer.iss). The folder comes from Windows, so a
+    redirected Startup folder is found too; the usual place under APPDATA
+    is the fallback. Returns None when neither is known."""
+    folder = _known_startup_folder()
+    if folder is None:
+        appdata = os.environ.get("APPDATA")
+        if not appdata:
+            return None
+        folder = Path(appdata) / "Microsoft/Windows/Start Menu/Programs/Startup"
+    return folder / _STARTUP_SHORTCUT_NAME
 
 
 def is_autostart_enabled():
@@ -1066,18 +1110,31 @@ def set_autostart_enabled(enabled):
         return False, "Windows registry access is unavailable."
 
     try:
-        with winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, _AUTOSTART_KEY_PATH, 0, winreg.KEY_SET_VALUE
-        ) as key:
-            if enabled:
+        if enabled:
+            # CreateKeyEx opens the Run key, or creates it on a profile that
+            # has none yet.
+            with winreg.CreateKeyEx(
+                winreg.HKEY_CURRENT_USER, _AUTOSTART_KEY_PATH, 0, winreg.KEY_SET_VALUE
+            ) as key:
                 winreg.SetValueEx(
                     key, _AUTOSTART_VALUE_NAME, 0, winreg.REG_SZ, _autostart_command()
                 )
-            else:
-                try:
-                    winreg.DeleteValue(key, _AUTOSTART_VALUE_NAME)
-                except FileNotFoundError:
-                    pass
+        else:
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    _AUTOSTART_KEY_PATH,
+                    0,
+                    winreg.KEY_SET_VALUE,
+                ) as key:
+                    try:
+                        winreg.DeleteValue(key, _AUTOSTART_VALUE_NAME)
+                    except FileNotFoundError:
+                        pass
+            except FileNotFoundError:
+                # No Run key at all, so nothing is registered there; the
+                # installer's shortcut below still has to go.
+                pass
     except OSError as error:
         return False, f"Could not update Windows startup settings: {error}"
     # Only one mechanism may launch the app at login, so the installer's
@@ -1122,7 +1179,8 @@ class WindowApi:
         # while the first call is still in flight); only the first call may
         # start mining.
         self._mining_lock = threading.Lock()
-        self._mining_started = False
+        # main() has already started mining when no username was needed.
+        self._mining_started = not needs_username
 
     def get_console_tail(self, since_seq=0):
         lines, next_seq = self._console_buffer.tail(int(since_seq or 0))
@@ -1140,20 +1198,25 @@ class WindowApi:
         with the bundled template's placeholder, which would just fail
         Twitch login immediately on every first run.
         """
-        try:
-            from TwitchChannelPointsMiner.config_editor import (
-                ConfigEditError,
-                set_miner_username,
-            )
-
-            set_miner_username(self._config_path, username)
-        except (ConfigEditError, OSError) as error:
-            return {"success": False, "message": str(error)}
-        self._needs_username = False
+        # Held for the whole call, and a call after mining started saves
+        # nothing: the running miner already read the first username, so a
+        # second one written now would only take effect on the next start.
         with self._mining_lock:
-            if not self._mining_started:
-                self._mining_started = True
-                self._start_mining()
+            if self._mining_started:
+                return {"success": True, "message": None}
+            try:
+                from TwitchChannelPointsMiner.config_editor import (
+                    ConfigEditError,
+                    set_miner_username,
+                )
+
+                set_miner_username(self._config_path, username)
+            except (ConfigEditError, OSError) as error:
+                return {"success": False, "message": str(error)}
+            self._needs_username = False
+            # Marked only once it started, so a failed start can be retried.
+            self._start_mining()
+            self._mining_started = True
         return {"success": True, "message": None}
 
     def get_dashboard_info(self):
@@ -2465,7 +2528,9 @@ def register_background_task(at_boot=False):
     try:
         import winreg
 
-        with winreg.OpenKey(
+        # CreateKeyEx opens the Run key, or creates it on a profile that has
+        # none yet.
+        with winreg.CreateKeyEx(
             winreg.HKEY_CURRENT_USER, _AUTOSTART_KEY_PATH, 0, winreg.KEY_SET_VALUE
         ) as key:
             winreg.SetValueEx(

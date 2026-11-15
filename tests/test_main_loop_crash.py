@@ -198,8 +198,12 @@ def test_mine_does_not_stop_workers_when_a_restart_was_requested():
     miner.ws_pool = MagicMock()
     miner.twitch.restart_requested = threading.Event()
     miner.twitch.restart_requested.set()
+    miner.running = False
 
-    with patch.object(TwitchChannelPointsMiner, "run"):
+    def start_session(*_args, **_kwargs):
+        miner.running = True
+
+    with patch.object(TwitchChannelPointsMiner, "run", side_effect=start_session):
         miner.mine([])
 
     assert miner.running is True
@@ -214,7 +218,10 @@ def test_mine_stops_workers_when_run_returns_without_a_restart():
     miner.ws_pool = MagicMock()
     miner.twitch.restart_requested = threading.Event()
 
+    miner.running = False
+
     def stop_from_twitch(*_args, **_kwargs):
+        miner.running = True
         miner.twitch.running = False
 
     with patch.object(TwitchChannelPointsMiner, "run", side_effect=stop_from_twitch):
@@ -230,7 +237,10 @@ def test_mine_does_not_stop_workers_again_after_end():
     miner.ws_pool = MagicMock()
     miner.twitch.restart_requested = threading.Event()
 
+    miner.running = False
+
     def end_from_another_thread(*_args, **_kwargs):
+        miner.running = True
         miner.running = miner.twitch.running = False
 
     with patch.object(
@@ -238,6 +248,21 @@ def test_mine_does_not_stop_workers_again_after_end():
     ):
         miner.mine([])
 
+    miner.ws_pool.end.assert_not_called()
+
+
+def test_mine_called_again_while_running_keeps_the_active_session():
+    # run() refuses a second session and returns; that must not stop the
+    # session that is already running.
+    miner = _miner()
+    miner.ws_pool = MagicMock()
+    miner.twitch.restart_requested = threading.Event()
+    miner.running = True
+
+    with patch.object(TwitchChannelPointsMiner, "run", return_value=None):
+        miner.mine([])
+
+    assert miner.running is True
     miner.ws_pool.end.assert_not_called()
 
 
@@ -266,8 +291,8 @@ def test_signal_during_crash_shutdown_does_not_exit_cleanly():
     streamer.irc_chat = MagicMock()
     streamer.irc_chat.is_alive.return_value = False
     streamer.settings = SimpleNamespace(chat=ChatPresence.ALWAYS)
-    # Leaving chat is the first, slowest step of stopping the workers.
-    streamer.leave_chat = lambda: miner.end(None, None)
+    # Retiring chat is the first, slowest step of stopping the workers.
+    streamer.retire_chat = lambda timeout=None: miner.end(None, None)
     miner.streamers = [streamer]
 
     with (
@@ -352,6 +377,48 @@ def test_reconnection_survives_a_failing_close(monkeypatch):
     WebSocketsPool.handle_reconnection(websocket)
 
     assert websocket.is_closed is True
+
+
+def test_reconnection_aborts_the_old_socket_before_closing_it(monkeypatch):
+    # close() waits on the reader's lock; on a half-open connection only
+    # aborting the socket first wakes the reader so close() can finish.
+    calls = []
+    websocket = SimpleNamespace(
+        index=0,
+        is_reconnecting=False,
+        forced_close=True,
+        topics=[],
+        is_closed=False,
+        keep_running=True,
+        sock=SimpleNamespace(abort=lambda: calls.append("abort")),
+        close=lambda: calls.append("close"),
+    )
+
+    WebSocketsPool.handle_reconnection(websocket)
+
+    assert calls == ["abort", "close"]
+
+
+def test_reconnection_survives_a_failing_abort(monkeypatch):
+    closed = []
+
+    def failing_abort():
+        raise OSError("already gone")
+
+    websocket = SimpleNamespace(
+        index=0,
+        is_reconnecting=False,
+        forced_close=True,
+        topics=[],
+        is_closed=False,
+        keep_running=True,
+        sock=SimpleNamespace(abort=failing_abort),
+        close=lambda: closed.append(True),
+    )
+
+    WebSocketsPool.handle_reconnection(websocket)
+
+    assert closed == [True]
 
 
 def test_pool_end_survives_websockets_retired_mid_loop():
@@ -531,26 +598,60 @@ def test_crash_alert_is_flushed_even_if_stopping_a_worker_fails():
     miner.queue_listener.stop.assert_called_once()
 
 
-def test_stop_workers_waits_for_the_running_irc_thread():
-    # leave_chat() swaps in a fresh, unstarted ThreadChat; joining
-    # streamer.irc_chat afterwards never waited for the real IRC thread.
+def test_stop_workers_retires_and_waits_for_the_running_irc_thread():
     miner = _miner()
-    running_chat = MagicMock()
-    running_chat.is_alive.return_value = True
     streamer = _streamer("alice")
-    streamer.irc_chat = running_chat
+    streamer.irc_chat = MagicMock()
     streamer.settings = SimpleNamespace(chat=ChatPresence.ALWAYS)
     streamer.mutex.locked.return_value = False
-
-    def leave_chat():
-        streamer.irc_chat = MagicMock()
-
-    streamer.leave_chat = leave_chat
+    streamer.retire_chat = MagicMock()
     miner.streamers = [streamer]
 
     miner._TwitchChannelPointsMiner__stop_workers()
 
-    running_chat.join.assert_called_once_with(timeout=10)
+    streamer.retire_chat.assert_called_once_with(timeout=10)
+
+
+def test_late_status_update_after_shutdown_does_not_start_a_chat(monkeypatch):
+    # An online/offline update still in flight when the miner stops (e.g. the
+    # minute watcher's) must not start a chat for the streamer afterwards.
+    from TwitchChannelPointsMiner.classes.Chat import ThreadChat
+    from TwitchChannelPointsMiner.classes.entities import Streamer as streamer_module
+    from TwitchChannelPointsMiner.classes.entities.Streamer import (
+        Streamer,
+        StreamerSettings,
+    )
+
+    release = threading.Event()
+    started = []
+
+    class RecordingChat(ThreadChat):
+        def start(self):
+            started.append(self)
+            super().start()
+
+        def run(self):
+            release.wait(timeout=5)
+
+        def stop(self):
+            release.set()
+
+    monkeypatch.setattr(streamer_module, "ThreadChat", RecordingChat)
+    miner = _miner()
+    streamer = Streamer("alice", settings=StreamerSettings(chat=ChatPresence.OFFLINE))
+    streamer.irc_chat = RecordingChat("u", "t", "alice")
+    streamer.is_online = False
+    streamer.toggle_chat()
+    running = streamer.irc_chat
+    started.clear()
+    miner.streamers = [streamer]
+
+    miner._TwitchChannelPointsMiner__stop_workers()
+    # The late update: an OFFLINE-chat streamer reported offline again.
+    streamer.toggle_chat()
+
+    assert not running.is_alive()
+    assert started == []
 
 
 def _lingering_thread():

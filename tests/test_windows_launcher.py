@@ -1336,6 +1336,11 @@ def test_wait_until_dashboard_ready_ignores_system_proxy_settings(monkeypatch):
         _host, dead_port = probe.getsockname()
     monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{dead_port}")
     monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{dead_port}")
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    # urlopen() caches its opener, with the proxy settings of its first call,
+    # so an earlier test would otherwise hide the proxy from this one.
+    monkeypatch.setattr(urllib.request, "_opener", None, raising=False)
     server, thread = _start_http_server(_OkHandler)
     try:
         host, port = server.server_address
@@ -1788,11 +1793,67 @@ def test_window_api_submit_username_twice_starts_mining_only_once(tmp_path):
     )
 
     first = api.submit_username(_REAL_USERNAME)
-    second = api.submit_username(_REAL_USERNAME)
+    second = api.submit_username("someone_else")
 
     assert first == {"success": True, "message": None}
     assert second == {"success": True, "message": None}
     assert started == [True]
+    # The second call saves nothing: the miner already runs with the first.
+    text = config_path.read_text(encoding="utf-8")
+    assert f"'username': {_REAL_USERNAME!r}" in text
+    assert "someone_else" not in text
+
+
+def test_window_api_submit_username_can_retry_after_a_failed_start(tmp_path):
+    config_path = tmp_path / "config.py"
+    config_path.write_text(
+        "MINER_CONFIG = {'username': 'your-twitch-username'}\n", encoding="utf-8"
+    )
+    attempts = []
+
+    def start_mining():
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise RuntimeError("can't start new thread")
+
+    api = windows_launcher.WindowApi(
+        windows_launcher.ConsoleBuffer(),
+        dashboard_info=None,
+        initial_tab=None,
+        config_path=config_path,
+        needs_username=True,
+        start_mining=start_mining,
+        logs_dir=None,
+    )
+
+    with pytest.raises(RuntimeError):
+        api.submit_username(_REAL_USERNAME)
+    assert api.submit_username(_REAL_USERNAME) == {"success": True, "message": None}
+    assert len(attempts) == 2
+
+
+def test_window_api_submit_username_after_main_started_mining_does_nothing(tmp_path):
+    # With a configured username, main() starts mining before the shell
+    # exists, so a submit must neither save nor start a second miner.
+    config_path = tmp_path / "config.py"
+    original = f"MINER_CONFIG = {{'username': {_REAL_USERNAME!r}}}\n"
+    config_path.write_text(original, encoding="utf-8")
+    started = []
+    api = windows_launcher.WindowApi(
+        windows_launcher.ConsoleBuffer(),
+        dashboard_info=None,
+        initial_tab=None,
+        config_path=config_path,
+        needs_username=False,
+        start_mining=lambda: started.append(True),
+        logs_dir=None,
+    )
+
+    result = api.submit_username("someone_else")
+
+    assert result == {"success": True, "message": None}
+    assert started == []
+    assert config_path.read_text(encoding="utf-8") == original
 
 
 def test_window_api_submit_username_reports_invalid_username_without_starting(tmp_path):
@@ -3435,9 +3496,11 @@ def test_main_convert_only_is_exempt_from_the_single_instance_check(
 
 @pytest.fixture(autouse=True)
 def _isolate_startup_folder(monkeypatch, request, tmp_path):
-    # set_autostart_enabled() deletes the installer's Startup-folder shortcut
-    # under %APPDATA%. Point APPDATA at a temp dir for autostart tests so a
-    # developer's real installed shortcut is never touched.
+    # set_autostart_enabled() deletes the installer's Startup-folder shortcut.
+    # Never ask Windows for the real Startup folder, and point APPDATA at a
+    # temp dir for autostart tests, so a developer's real installed shortcut
+    # is never touched.
+    monkeypatch.setattr(windows_launcher, "_known_startup_folder", lambda: None)
     if "autostart" not in request.node.name:
         return
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
@@ -3448,6 +3511,36 @@ def _create_installer_shortcut():
     shortcut.parent.mkdir(parents=True)
     shortcut.write_text("shortcut", encoding="utf-8")
     return shortcut
+
+
+def test_startup_shortcut_path_uses_the_folder_windows_reports(monkeypatch, tmp_path):
+    # A redirected Startup folder is not under APPDATA.
+    redirected = tmp_path / "LoginApps"
+    monkeypatch.setattr(windows_launcher, "_known_startup_folder", lambda: redirected)
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+
+    assert windows_launcher._startup_shortcut_path() == (
+        redirected / "Twitch Channel Points Miner.lnk"
+    )
+
+
+def test_known_startup_folder_is_none_off_windows(monkeypatch):
+    monkeypatch.undo()  # drop the autouse stub to call the real lookup
+    monkeypatch.setattr(windows_launcher.os, "name", "posix")
+
+    assert windows_launcher._known_startup_folder() is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="needs the Windows shell API")
+def test_known_startup_folder_resolves_on_windows(monkeypatch):
+    # Read-only: asks Windows where the Startup folder is, touching nothing.
+    monkeypatch.undo()  # drop the autouse stub to call the real lookup
+
+    folder = windows_launcher._known_startup_folder()
+
+    assert folder is not None
+    # A redirected folder can have any name, so only check it is a real path.
+    assert folder.is_absolute()
 
 
 def test_startup_shortcut_path_none_when_appdata_unset(monkeypatch):
@@ -3516,6 +3609,34 @@ def test_set_autostart_enabled_reports_shortcut_removal_failure(monkeypatch):
     assert shortcut.exists()
 
 
+def test_set_autostart_enabled_false_without_a_run_key_removes_installer_shortcut(
+    monkeypatch,
+):
+    # A profile can lack the Run key entirely; turning autostart off must
+    # still remove the installer's shortcut.
+    monkeypatch.setattr(windows_launcher.sys, "frozen", True, raising=False)
+    fake_winreg, store = _fake_winreg_module()
+    monkeypatch.setitem(windows_launcher.sys.modules, "winreg", fake_winreg)
+    shortcut = _create_installer_shortcut()
+
+    success, _message = windows_launcher.set_autostart_enabled(False)
+
+    assert success is True
+    assert not shortcut.exists()
+    assert store == {}
+
+
+def test_set_autostart_enabled_true_creates_a_missing_run_key(monkeypatch):
+    monkeypatch.setattr(windows_launcher.sys, "frozen", True, raising=False)
+    fake_winreg, store = _fake_winreg_module()
+    monkeypatch.setitem(windows_launcher.sys.modules, "winreg", fake_winreg)
+
+    success, _message = windows_launcher.set_autostart_enabled(True)
+
+    assert success is True
+    assert windows_launcher.is_autostart_enabled() is True
+
+
 def _fake_winreg_module():
     """A minimal stand-in for the stdlib `winreg` module (Windows-only, so
     real registry access can't be exercised here) - a plain dict backs a
@@ -3532,9 +3653,12 @@ def _fake_winreg_module():
             return False
 
     def OpenKey(hive, path, *args):
-        if path not in store and not args:
-            # QueryValueEx path: reading a key that was never created.
+        # Like the real OpenKey, opening never creates a missing key.
+        if path not in store:
             raise FileNotFoundError(path)
+        return FakeKeyHandle()
+
+    def CreateKeyEx(hive, path, *args):
         store.setdefault(path, {})
         return FakeKeyHandle()
 
@@ -3559,6 +3683,7 @@ def _fake_winreg_module():
         KEY_SET_VALUE=1,
         REG_SZ=1,
         OpenKey=OpenKey,
+        CreateKeyEx=CreateKeyEx,
         QueryValueEx=QueryValueEx,
         SetValueEx=SetValueEx,
         DeleteValue=DeleteValue,

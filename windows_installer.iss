@@ -134,6 +134,13 @@ Name: "{group}\Background mining logs"; Filename: "{localappdata}\TwitchChannelP
 ; installer itself never writes the value.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "TwitchChannelPointsMiner"; Flags: uninsdeletevalue
 
+[Registry]
+; The in-app Settings tab registers start-on-login under this HKCU Run value
+; (windows_launcher.py's _AUTOSTART_VALUE_NAME). Declaring it here, with
+; uninsdeletevalue, makes uninstall remove it too; ValueType none means the
+; installer itself never writes the value.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "TwitchChannelPointsMiner"; Flags: uninsdeletevalue
+
 [Run]
 ; Register background mode, or remove a registration left by an earlier
 ; install when the task is no longer selected.

@@ -1088,38 +1088,6 @@ def test_non_ascii_dashboard_credentials_authenticate():
     assert client.get(page, headers=basic("pässwort")).status_code == 401
 
 
-def test_log_endpoint_serves_configured_log_file(tmp_path):
-    log_file = tmp_path / "someone.20260101-120000.log"
-    log_file.write_bytes(b"line one\nline two\n")
-    server = AnalyticsServer(password=None, logs_file=str(log_file))
-
-    response = server.app.test_client().get("/log?lastIndex=0")
-
-    assert response.status_code == 200
-    assert response.get_data() == b"line one\nline two\n"
-    assert response.headers["X-Log-Position"] == str(log_file.stat().st_size)
-
-
-def test_log_endpoint_reports_missing_log_file(tmp_path):
-    server = AnalyticsServer(password=None, logs_file=str(tmp_path / "missing.log"))
-
-    response = server.app.test_client().get("/log?lastIndex=0")
-
-    assert response.status_code == 404
-    assert response.get_data(as_text=True) == "Log file not found."
-    assert "X-Log-Unavailable" not in response.headers
-
-
-def test_log_endpoint_reports_disabled_file_logging():
-    server = AnalyticsServer(password=None, logs_file=None)
-
-    response = server.app.test_client().get("/log?lastIndex=0")
-
-    assert response.status_code == 404
-    assert response.headers["X-Log-Unavailable"] == "disabled"
-    assert "File logging is disabled" in response.get_data(as_text=True)
-
-
 @pytest.mark.parametrize("host_header", ["evil.example", "evil.example:5000"])
 def test_loopback_dashboard_rejects_foreign_host_header(host_header):
     server = AnalyticsServer(password=None)
@@ -1322,3 +1290,62 @@ def test_run_reports_other_bind_failures_without_blaming_another_program(
     assert "Could not start the analytics dashboard" in caplog.text
     assert "Check 'host' and 'port'" in caplog.text
     assert "Another program" not in caplog.text
+
+
+def test_log_endpoint_serves_configured_log_file(tmp_path):
+    log_file = tmp_path / "someone.20260101-120000.log"
+    log_file.write_bytes(b"line one\nline two\n")
+    server = AnalyticsServer(password=None, logs_file=str(log_file))
+
+    response = server.app.test_client().get("/log?lastIndex=0")
+
+    assert response.status_code == 200
+    assert response.get_data() == b"line one\nline two\n"
+    assert response.headers["X-Log-Position"] == str(log_file.stat().st_size)
+
+
+def test_log_endpoint_reports_missing_log_file(tmp_path):
+    server = AnalyticsServer(password=None, logs_file=str(tmp_path / "missing.log"))
+
+    response = server.app.test_client().get("/log?lastIndex=0")
+
+    assert response.status_code == 404
+    assert response.get_data(as_text=True) == "Log file not found."
+    assert "X-Log-Unavailable" not in response.headers
+
+
+def test_log_endpoint_reports_disabled_file_logging():
+    server = AnalyticsServer(password=None, logs_file=None)
+
+    response = server.app.test_client().get("/log?lastIndex=0")
+
+    assert response.status_code == 404
+    assert response.headers["X-Log-Unavailable"] == "disabled"
+    assert "File logging is disabled" in response.get_data(as_text=True)
+
+
+def test_miner_passes_its_log_file_to_the_dashboard(monkeypatch):
+    from TwitchChannelPointsMiner.TwitchChannelPointsMiner import (
+        TwitchChannelPointsMiner,
+    )
+    from TwitchChannelPointsMiner.classes import AnalyticsServer as server_module
+    from TwitchChannelPointsMiner.classes.Settings import Settings
+
+    created = []
+
+    class FakeServer:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(server_module, "AnalyticsServer", FakeServer)
+    monkeypatch.setattr(Settings, "enable_analytics", True, raising=False)
+    miner = object.__new__(TwitchChannelPointsMiner)
+    miner.username = "someone"
+    miner.logs_file = "/logs/someone.20260101-120000.log"
+
+    miner.analytics()
+
+    assert created[0]["logs_file"] == "/logs/someone.20260101-120000.log"

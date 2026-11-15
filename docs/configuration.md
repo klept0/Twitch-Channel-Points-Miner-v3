@@ -127,7 +127,10 @@ is the legacy `run.py` workflow; existing installations can
 [migrate from run.py](migration.md#migrating-from-runpy).
 
 The runner checks `config/config.py` every five seconds. Set
-`TCPM_CONFIG_RELOAD_SECONDS` to change the interval; the minimum is one second.
+`TCPM_CONFIG_RELOAD_SECONDS` to change the interval in seconds. Values below one
+second are raised to one, and an unset or blank value uses the default. Anything
+that isn't a number of seconds up to one day (86400), such as `5s`, `nan` or
+`inf`, stops startup with an error naming the variable.
 
 At startup, the runner checks `CONFIG_VERSION`. Unversioned configurations are
 backed up as `config.py.v0.bak` and upgraded in place. The migration adds missing
@@ -153,3 +156,10 @@ backup without overwriting it.
   non-category `MINE_CONFIG` options require a restart.
 - Invalid configuration is logged and ignored. The watcher retries after the
   file changes again.
+
+## Supervisor (optional)
+
+The [supervisor directory](../supervisor/) provides an optional supervisor for
+source checkouts on Windows, Linux, and macOS. It restarts the miner on crashes
+and on a daily schedule, applies `git` updates, and sends alerts. The Windows
+executable and Docker do not need it. See [Supervisor](supervisor.md) for setup.

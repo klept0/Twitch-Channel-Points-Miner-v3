@@ -6,12 +6,15 @@ Read the root [AGENTS.md](../AGENTS.md) first. This file covers what is easy to 
 
 The miner runs many threads against the same objects: the main loop in `TwitchChannelPointsMiner.run()`, the minute watcher (`Twitch.send_minute_watched_events()`), campaign sync, the Drop badge catalog, category discovery, one thread per PubSub websocket plus its ping thread, one IRC thread per joined chat, the config watcher in `runner.py`, and the analytics server.
 
-- `miner.streamers`, `miner.original_streamers` and `WebSocketsPool.ws` are shared by reference. Retirement and config reloads change them under `config_reload_lock` (an `RLock`). Other threads read them without that lock, so iterate a snapshot (`list(self.streamers)`) and re-check that an item is still present before acting on it.
+- `miner.streamers`, `miner.original_streamers` and `WebSocketsPool.ws` are shared by reference. They are `CopyOnWriteList`s (`classes/CopyOnWriteList.py`): each write swaps in a new tuple, so a loop over one keeps the version it started with. Retirement and config reloads change the two streamer lists under `config_reload_lock` (an `RLock`), and the pool changes `ws` under its own `topic_lock`. Other threads read all three without a lock.
+  - Take `snapshot()` or `list(...)` once before indexing by position, and re-check that an item is still present before acting on it.
+  - Change them in place (`[:] =`, `append`, item assignment). Never rebind the attribute: the websocket pool and each websocket hold the same `streamers` list.
+  - They don't support `+`, `copy.deepcopy` or pickling. Use `list(...)` first.
 - `streamers` and `original_streamers` are parallel lists. Read them as pairs only while holding `config_reload_lock`.
 - Locks and fields that tests may not set up are read with `getattr(self, "name", default)`, and some locks are created lazily, because many tests build `Twitch` with `object.__new__` and skip `__init__`. Follow that pattern when you add state that other code reads.
 - Every new attribute on a class with `__slots__` needs a slot entry.
 - Results that must not leak between threads, such as the latest Drops dashboard outcome, are thread-local (`_drops_dashboard_state` in `classes/Twitch.py`).
-- Prefer replacing a shared container with a new one over mutating it in place when other threads iterate it.
+- Other shared containers can be held by several objects. For example, the miner, the websocket pool and every websocket hold the same `events_predictions` dict. Keep such a container the same object and change it in place. Replacing it would leave the other holders with the old one.
 
 ## Configuration files
 
@@ -28,13 +31,13 @@ The miner runs many threads against the same objects: the main loop in `TwitchCh
 
 - `require_authentication()` guards every route except an allowlist of static asset extensions. Page templates in the same folder still go through it.
 - The Config tab needs a configured analytics password. Without one, `/config` routes are refused.
-- The Windows desktop app passes a per-process token in `TCPM_SHELL_ANALYTICS_TOKEN` (`SHELL_BYPASS_TOKEN_ENV_VAR`). The server exchanges it for a cookie so the embedded window skips the Basic Auth prompt. Compare secrets with `secrets.compare_digest` (see the helper near the top of the file).
+- The Windows desktop app passes a per-process token in `TCPM_SHELL_ANALYTICS_TOKEN` (`SHELL_BYPASS_TOKEN_ENV_VAR`). The server exchanges it for a cookie so the embedded window skips the Basic Auth prompt. Compare secrets with `_secret_matches()` in the same file. It runs `secrets.compare_digest` on UTF-8 bytes; calling `compare_digest` on `str` values raises `TypeError` for non-ASCII text and turns a login into an HTTP 500.
 - Any new route that reads account data or changes the config must stay behind these checks.
 
 ## Secrets
 
 - Never log tokens, passwords, cookie contents, webhook URLs or full request URLs. Notifier failures go through `format_request_failure()` in `classes/NotificationError.py`, which describes the failure without the URL.
-- Login sessions are pickled to `cookies/<username>.pkl` (`<username>-android.pkl` for the Android login). Treat those files as credentials.
+- Login sessions are saved as JSON in `cookies/<username>.pkl` (`<username>-android.pkl` for the Android login). The `.pkl` name is historical: older pickled files are read with a restricted unpickler only to migrate them to JSON. Treat those files as credentials.
 - Examples and docs use placeholders only.
 
 ## Notifiers

@@ -208,6 +208,7 @@ class Twitch(object):
         "campaign_details_withheld_logged",
         "campaign_details_withheld_streak",
         "drops_dashboard_withheld_streak",
+        "drops_dashboard_withheld_lock",
         "unevaluated_category_slugs",
         "awarded_game_event_drops",
         "twitchdrops_app_campaigns",
@@ -328,6 +329,7 @@ class Twitch(object):
         self.campaign_details_withheld_logged = False
         self.campaign_details_withheld_streak = 0
         self.drops_dashboard_withheld_streak = 0
+        self.drops_dashboard_withheld_lock = Lock()
         self.unevaluated_category_slugs = set()
         self.awarded_game_event_drops = {}
         self.twitchdrops_app_campaigns = {}
@@ -1232,7 +1234,8 @@ class Twitch(object):
         game_campaigns = [
             campaign
             for campaign in self.discovered_open_drop_campaigns or []
-            if self.__slugify(
+            if not self.__is_known_reward_campaign(campaign)
+            and self.__slugify(
                 (campaign.get("game") or {}).get("displayName")
                 or (campaign.get("game") or {}).get("name")
                 or ""
@@ -1715,9 +1718,10 @@ class Twitch(object):
         self.campaign_lookup_unavailable = getattr(
             _drops_dashboard_state, "unavailable", False
         )
+        raw_query_campaigns, _ = self.__get_reward_campaigns_raw_query()
         helix_campaigns, _ = self.__get_open_drop_campaigns_from_helix()
         campaigns_by_id = {}
-        for campaign in dashboard_campaigns + helix_campaigns:
+        for campaign in dashboard_campaigns + raw_query_campaigns + helix_campaigns:
             if not isinstance(campaign, dict):
                 continue
             campaign_id = campaign.get("id")
@@ -5771,15 +5775,24 @@ class Twitch(object):
         dashboard_campaigns, dashboard_response = self.__get_drops_dashboard(
             return_raw=True
         )
+        raw_query_campaigns, raw_query_debug = self.__get_reward_campaigns_raw_query()
         helix_campaigns, helix_pages = self.__get_open_drop_campaigns_from_helix(
             return_raw=True
         )
         campaigns_by_id = {}
-        for campaign in dashboard_campaigns + helix_campaigns:
+        for campaign in dashboard_campaigns + raw_query_campaigns + helix_campaigns:
             if not isinstance(campaign, dict):
                 continue
             campaign_id = campaign.get("id")
             if campaign_id not in [None, ""]:
+                existing = campaigns_by_id.get(str(campaign_id))
+                if existing is not None:
+                    # Helix records carry no earn-mechanism field; keep the
+                    # reward tag an earlier source set for the same id.
+                    campaign.setdefault(
+                        "_is_reward_campaign",
+                        existing.get("_is_reward_campaign", False),
+                    )
                 campaigns_by_id[str(campaign_id)] = campaign
 
         all_campaigns = list(campaigns_by_id.values())
@@ -5795,6 +5808,7 @@ class Twitch(object):
         self.__log_drop_check_json(
             "graphql ViewerDropsDashboard raw response", dashboard_response
         )
+        self.__log_drop_check_json("graphql raw query debug", raw_query_debug)
         self.__log_drop_check_json("helix open campaigns raw pages", helix_pages)
         self.__log_drop_check_json("helix open campaigns extracted", helix_campaigns)
         self.__log_drop_check_json(
@@ -5829,7 +5843,7 @@ class Twitch(object):
             campaign_name = campaign.get("name") or "Unknown Campaign"
             campaign_id = campaign.get("id") or "n/a"
             status = campaign.get("status") or "IN_PROGRESS"
-            end_at = campaign.get("endAt") or "n/a"
+            end_at = campaign.get("endAt") or campaign.get("endsAt") or "n/a"
 
             logger.debug(
                 (
@@ -6273,9 +6287,12 @@ class Twitch(object):
         require_twitch_allowlist = channel_query_answered and is_category_tier(streamer)
         campaign_ids = set()
         possible_campaigns = [(campaign, "gist") for campaign in fallback_campaigns]
+        # Purchase-gated reward campaigns are never watch campaigns, and a
+        # game-less one would otherwise match every game below.
         possible_campaigns.extend(
             (campaign, "dashboard")
             for campaign in self.discovered_open_drop_campaigns or []
+            if not self.__is_known_reward_campaign(campaign)
         )
         possible_campaigns.extend(
             (campaign, "authoritative") for campaign in authoritative_campaigns
@@ -6597,6 +6614,129 @@ class Twitch(object):
             )
             return [], False, False
 
+    def __get_reward_campaigns_raw_query(self):
+        query_variants = [
+            {
+                "name": "root_rewardCampaignsAvailableToUser_object",
+                "query": (
+                    "query MinerRewardCampaignsRaw{"
+                    "rewardCampaignsAvailableToUser{"
+                    "id name status startsAt endsAt game{id slug displayName name}"
+                    "}"
+                    "}"
+                ),
+                "path": ["data", "rewardCampaignsAvailableToUser"],
+                "is_connection": False,
+            },
+        ]
+
+        campaigns_by_id = {}
+        debug = {"variants": []}
+
+        for variant in query_variants:
+            cursor = None
+            pages = 0
+            variant_errors = []
+            variant_count = 0
+
+            while pages < 20:
+                pages += 1
+                payload = {
+                    "operationName": "MinerRewardCampaignsRaw",
+                    "query": variant["query"],
+                    "variables": (
+                        {"first": 100, "after": cursor}
+                        if variant["is_connection"] is True
+                        else {}
+                    ),
+                }
+
+                try:
+                    response = self.gql.post_gql_request_raw(
+                        payload["operationName"], payload
+                    )
+                except RetryError as error:
+                    variant_errors.append(str(error))
+                    break
+                if not isinstance(response, dict):
+                    break
+
+                if response.get("errors"):
+                    variant_errors.extend(response.get("errors") or [])
+                    break
+
+                node = response
+                for key in variant["path"]:
+                    if not isinstance(node, dict):
+                        node = None
+                        break
+                    node = node.get(key)
+
+                if node in [None, {}]:
+                    break
+
+                if variant["is_connection"] is True and isinstance(node, dict):
+                    edges = node.get("edges", []) or []
+                    for edge in edges:
+                        campaign = edge.get("node") if isinstance(edge, dict) else None
+                        if not isinstance(campaign, dict):
+                            continue
+                        campaign_id = campaign.get("id")
+                        if campaign_id in [None, ""]:
+                            continue
+                        campaigns_by_id[str(campaign_id)] = campaign
+                        variant_count += 1
+
+                    page_info = (
+                        node.get("pageInfo", {}) if isinstance(node, dict) else {}
+                    )
+                    has_next = (
+                        page_info.get("hasNextPage") is True
+                        if isinstance(page_info, dict)
+                        else False
+                    )
+                    cursor = (
+                        page_info.get("endCursor")
+                        if isinstance(page_info, dict)
+                        else None
+                    )
+                    if has_next is not True or cursor in [None, ""]:
+                        break
+                elif isinstance(node, list):
+                    for campaign in node:
+                        if not isinstance(campaign, dict):
+                            continue
+                        campaign_id = campaign.get("id")
+                        if campaign_id in [None, ""]:
+                            continue
+                        campaigns_by_id[str(campaign_id)] = campaign
+                        variant_count += 1
+                    break
+                elif isinstance(node, dict):
+                    campaign_id = node.get("id")
+                    if campaign_id not in [None, ""]:
+                        campaigns_by_id[str(campaign_id)] = node
+                        variant_count += 1
+                    break
+                else:
+                    break
+
+            debug["variants"].append(
+                {
+                    "name": variant["name"],
+                    "pages": pages,
+                    "captured": variant_count,
+                    "errors": variant_errors,
+                }
+            )
+
+        campaigns = list(campaigns_by_id.values())
+        for campaign in campaigns:
+            if isinstance(campaign, dict):
+                campaign["_is_reward_campaign"] = True
+        debug["total_unique"] = len(campaigns)
+        return campaigns, debug
+
     @staticmethod
     def __normalize_completed_reward_campaigns(inventory, error_paths):
         """Make completedRewardCampaigns say whether it can be trusted.
@@ -6709,6 +6849,15 @@ class Twitch(object):
             self.__log_drop_check("failed to parse inventory response")
             return {}
 
+    def __drops_dashboard_withheld_lock(self):
+        # Defensive getattr: some tests construct Twitch via __new__ and skip
+        # __init__.
+        lock = getattr(self, "drops_dashboard_withheld_lock", None)
+        if lock is None:
+            lock = Lock()
+            self.drops_dashboard_withheld_lock = lock
+        return lock
+
     def __get_drops_dashboard(self, status=None, return_raw: bool = False):
         request_failed = False
         try:
@@ -6741,16 +6890,20 @@ class Twitch(object):
             and not response.get("errors")
             and self.__client_id() == ANDROID_CLIENT_ID
         )
-        if (
-            isinstance(current_user, dict)
-            and current_user.get("dropCampaigns") is not None
-        ):
-            self.drops_dashboard_withheld_streak = 0
-        elif android_withheld:
-            self.drops_dashboard_withheld_streak = (
-                getattr(self, "drops_dashboard_withheld_streak", 0) + 1
-            )
-        withheld_streak = getattr(self, "drops_dashboard_withheld_streak", 0)
+        # The sync and discovery threads share the streak. Update it under a
+        # lock and use the value this call wrote, so each count is seen by
+        # exactly one call and the warning is logged once.
+        with self.__drops_dashboard_withheld_lock():
+            if (
+                isinstance(current_user, dict)
+                and current_user.get("dropCampaigns") is not None
+            ):
+                self.drops_dashboard_withheld_streak = 0
+            elif android_withheld:
+                self.drops_dashboard_withheld_streak = (
+                    getattr(self, "drops_dashboard_withheld_streak", 0) + 1
+                )
+            withheld_streak = getattr(self, "drops_dashboard_withheld_streak", 0)
         unavailable = not isinstance(current_user, dict) or (
             current_user.get("dropCampaigns") is None
             and bool(response.get("errors") or self.__client_id() == ANDROID_CLIENT_ID)
@@ -6843,6 +6996,17 @@ class Twitch(object):
             return campaigns, response
 
         return campaigns
+
+    def __is_known_reward_campaign(self, campaign) -> bool:
+        """Whether a campaign is known to be subscription/gift/cheer-gated."""
+        if not isinstance(campaign, dict):
+            return False
+        if campaign.get("_is_reward_campaign") is True:
+            return True
+        campaign_id = str(campaign.get("id") or "")
+        return campaign_id != "" and campaign_id in (
+            getattr(self, "reward_campaign_ids", None) or set()
+        )
 
     def __is_open_drop_campaign(self, campaign: dict) -> bool:
         status = str(campaign.get("status") or "").upper()

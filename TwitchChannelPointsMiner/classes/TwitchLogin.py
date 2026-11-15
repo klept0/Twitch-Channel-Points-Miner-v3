@@ -100,7 +100,6 @@ def parse_android_login(pasted):
     try:
         parsed = urlparse(text)
     except ValueError:
-        # e.g. "https://[" is not a valid URL; urlparse raises for it.
         return None
     for part in (parsed.fragment, parsed.query):
         token = (parse_qs(part).get("access_token") or [""])[0]
@@ -351,10 +350,13 @@ class TwitchLogin(object):
         try:
             data = response.json() if response.content else {}
         except ValueError:
-            data = None
+            _android_error(
+                "Twitch returned invalid JSON while validating the Android login"
+            )
+            return False
         if not isinstance(data, dict):
             _android_error(
-                "Twitch sent an unexpected reply while validating the Android login"
+                "Twitch returned an unexpected response while validating the Android login"
             )
             return False
         if data.get("client_id") != ANDROID_CLIENT_ID:
