@@ -10,9 +10,8 @@
 
 > [!NOTE]
 > This is a fork of [zarmstrong/Twitch-Channel-Points-Miner-v3](https://github.com/zarmstrong/Twitch-Channel-Points-Miner-v3).
-> It tracks upstream and adds a few features of its own; see
-> [What this fork adds](#what-this-fork-adds). Its Docker image and Windows
-> builds are published from this repository and include them.
+> It tracks upstream, and its Docker image and Windows builds are published
+> from this repository.
 
 **Credits**
 - Main idea: https://github.com/gottagofaster236/Twitch-Channel-Points-Miner
@@ -30,7 +29,6 @@ Read more about the channel points [here](https://help.twitch.tv/s/article/chann
 
 - [Community](#community)
 - [Features](#features)
-- [What this fork adds](#what-this-fork-adds)
 - [How to use](#how-to-use)
   - [Install and start](#install-and-start)
   - [Configuration file](#configuration-file)
@@ -73,17 +71,6 @@ If you have any issues or you want to contribute, you are welcome! But please re
 - Includes an optional analytics server for point history, Drops, and log viewing.
 - Supports persistent Docker configuration with automatic legacy-runner
   conversion and limited live configuration reloads.
-
-## What this fork adds
-
-These features are in this fork's `master` branch but not yet in upstream.
-Each one is open as an upstream pull request.
-
-| Feature | What it does | Docs |
-| :-- | :-- | :-- |
-| 🧰 Supervisor | An optional cross-platform supervisor for source checkouts: restarts on crashes and on a schedule, applies `git` updates, and sends alerts. | [Supervisor](docs/supervisor.md) |
-| ⚡ Fast Drop claims | Claims Drops as soon as PubSub reports them claimable, including on channels the miner isn't tracking. | |
-| 🛟 Raw-query fallback | Resends a GraphQL query as raw text when Twitch rejects its persisted hash. | |
 
 ## How to use
 
@@ -279,7 +266,7 @@ categories, and analytics.
 | [Docker](docs/docker.md) | Container images, graceful shutdowns, Portainer |
 | [Windows](docs/windows.md) | Standard and portable builds, setup, updates, troubleshooting |
 | [Other platforms](docs/other-platforms.md) | Termux on Android, Replit |
-| [Supervisor](docs/supervisor.md) | Unattended source checkouts with restarts, updates and alerts (fork only) |
+| [Supervisor](docs/supervisor.md) | Unattended source checkouts with restarts, updates and alerts |
 | [Migration](docs/migration.md) | Migrating from `run.py`, persisted data versions, legacy cookies |
 
 ### Limits
