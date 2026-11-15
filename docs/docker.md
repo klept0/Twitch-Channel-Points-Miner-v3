@@ -3,7 +3,7 @@
 [Back to the README](../README.md)
 
 ## Container registry
-This fork's images are on GitHub Container Registry as `ghcr.io/klept0/twitch-channel-points-miner` for `linux/amd64` and `linux/arm64`, tagged with each release version and `latest`. See the [package page](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/pkgs/container/twitch-channel-points-miner). Upstream's Docker Hub image, `zacharmstrong/twitch-channel-points-miner`, does not include [this fork's additions](../README.md#what-this-fork-adds).
+This fork's images are on GitHub Container Registry as `ghcr.io/klept0/twitch-channel-points-miner` for `linux/amd64` and `linux/arm64`, tagged with each release version and `latest`. See the [package page](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/pkgs/container/twitch-channel-points-miner). Upstream publishes its own image, built from upstream's code, on Docker Hub as `zacharmstrong/twitch-channel-points-miner`.
 
 The ARM64 image can run in compatible 64-bit Android Linux environments where
 the device reports `aarch64` or `arm64-v8a`. Android itself is not a supported
