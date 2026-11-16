@@ -50,6 +50,7 @@ class DropClaims(object):
         "_drop_analytics",
         "_log_drop_check",
         "_forget_inventory_minutes",
+        "_claim_finished",
     ]
 
     def __init__(
@@ -59,6 +60,7 @@ class DropClaims(object):
         drop_analytics: Callable[[], Any],
         log_drop_check: Callable[..., None],
         forget_inventory_minutes: Callable[[Any], None],
+        claim_finished: Callable[[Any, Any], None] | None = None,
     ):
         """
         claim_rewards(drop_instance_id) sends the claim and returns the GQL
@@ -66,13 +68,15 @@ class DropClaims(object):
         drop_analytics() returns the DropAnalytics writer.
         log_drop_check(message, level) writes a [drops-check] line.
         forget_inventory_minutes(drop) drops the inventory minutes of a drop
-        whose claim was accepted.
+        whose claim was accepted. claim_finished(drop, result) is called
+        under the claim lock with the result of every claim attempt.
         """
         self._claim_rewards = claim_rewards
         self._get_inventory = get_inventory
         self._drop_analytics = drop_analytics
         self._log_drop_check = log_drop_check
         self._forget_inventory_minutes = forget_inventory_minutes
+        self._claim_finished = claim_finished
         # Serializes claims: the sync and prompt-claim passes can reach the
         # same drop at once.
         self.claim_lock = Lock()
@@ -351,7 +355,7 @@ class DropClaims(object):
         # Held across the request so a concurrent pass sees the accepted claim
         # instead of claiming and notifying a second time.
         with self.claim_lock:
-            return self._claim_drop(
+            result = self._claim_drop(
                 drop,
                 campaign=campaign,
                 streamer_username=streamer_username,
@@ -359,6 +363,9 @@ class DropClaims(object):
                 category_name_override=category_name_override,
                 campaign_link=campaign_link,
             )
+            if self._claim_finished is not None:
+                self._claim_finished(drop, result)
+            return result
 
     def _claim_drop(
         self,

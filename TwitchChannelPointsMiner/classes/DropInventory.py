@@ -112,13 +112,23 @@ class DropInventory(object):
                     break
         return reopened_ids
 
-    def progress(self, slugify, campaign_scope, accepted_claims) -> InventoryProgress:
+    def progress(
+        self,
+        slugify,
+        campaign_scope,
+        accepted_claims,
+        accepted_ids=frozenset(),
+        newer_minutes=None,
+    ) -> InventoryProgress:
         """The account's unfinished drops, grouped by game slug.
 
         ``campaign_scope(campaign_id, campaign)`` returns the campaign's
         channel scope and logins; ``accepted_claims`` holds the drop instance
-        IDs whose claims Twitch accepted.
+        IDs whose claims Twitch accepted and ``accepted_ids`` the IDs of those
+        drops. ``newer_minutes`` maps drop IDs to minutes reported after this
+        inventory was requested; the higher value wins.
         """
+        newer_minutes = newer_minutes or {}
         inventory = self.inventory
         progress_by_game: dict[str, list[tuple]] = {}
         finished_ids = set()
@@ -152,10 +162,15 @@ class DropInventory(object):
                     continue
                 required_minutes = drop.get("requiredMinutesWatched") or 0
                 current_minutes = drop_self.get("currentMinutesWatched") or 0
+                newer = newer_minutes.get(str(drop.get("id") or ""))
+                if newer is not None and newer > current_minutes:
+                    current_minutes = newer
                 instance_id = drop_self.get("dropInstanceID")
                 # An accepted claim counts as claimed; the inventory is lagging.
                 claimed = (
-                    drop_self.get("isClaimed") is True or instance_id in accepted_claims
+                    drop_self.get("isClaimed") is True
+                    or instance_id in accepted_claims
+                    or str(drop.get("id") or "") in accepted_ids
                 )
                 # A fully watched drop counts as finished only once it can be
                 # claimed: until Twitch issues its instance, it may still need
