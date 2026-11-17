@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.21.1-post.1](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.21.0-post.2...3.21.1-post.1) (2026-11-17)
+
+
+### Performance Improvements
+
+* **drops:** read per-minute drop progress from DropCurrentSessionContext instead of the full Inventory ([#330](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/330)) ([#336](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/336)) ([d182dd3](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/d182dd3fec8d9aee43c07b1887479d7b479af5b8))
+* **drops:** stop requesting the nonexistent Helix drops/campaigns endpoint ([#329](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/329)) ([#337](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/337)) ([47aaeb4](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/47aaeb4530501f80163a36232c71f4de9eb6ec72))
+
+
+### Documentation
+
+* add a security policy ([#334](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/issues/334)) ([f6892f2](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/f6892f29556f2d738013cba4fd1438797e34acf0))
+
+
+### Miscellaneous Chores
+
+* **release:** start the 3.21.1 fork series ([0e70e6b](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/commit/0e70e6b2f0f3e810bf9ae95e6ab01a82aa2b4cdf))
+
 ## [3.21.0-post.2](https://github.com/klept0/Twitch-Channel-Points-Miner-v3/compare/3.21.0-post.1...3.21.0-post.2) (2026-11-15)
 
 
